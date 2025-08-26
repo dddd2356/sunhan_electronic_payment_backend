@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -970,10 +971,21 @@ public class HtmlPdfRenderer {
         html.append("        <span style=\"font-weight: bold;\">회사 : 선한병원 대표원장 최철훈외 6명</span>");
 // 이름과 서명 이미지를 감싸는 새로운 Flexbox 컨테이너
         html.append("        <span style=\"display: inline-flex; align-items: center; justify-content: flex-end;\">");
-        if (formData.getCeoSignatureUrl() != null && !formData.getCeoSignatureUrl().isEmpty()) {
-            // 이미지 높이를 30px로 키우고, 너비는 자동으로 비율에 맞게 조절
-            html.append("        <img src=\"").append(formData.getCeoSignatureUrl()).append("\" alt=\"대표 서명\" style=\"height: 30px; margin-left: 10px; transform: translateY(10px);\"/>");
-        } else {
+        // 이미지 파일을 Base64로 변환하여 HTML에 직접 삽입
+        try {
+            // "resources" 폴더 내의 경로를 사용
+            InputStream imageStream = HtmlPdfRenderer.class.getClassLoader().getResourceAsStream("images/선한병원직인.png");
+            if (imageStream != null) {
+                byte[] imageBytes = imageStream.readAllBytes();
+                String base64Image = Base64.getEncoder().encodeToString(imageBytes);
+                // Base64 데이터를 이미지 소스로 사용
+                html.append("        <img src=\"data:image/png;base64,").append(base64Image).append("\" alt=\"대표 서명\" style=\"height: 40px; margin-left: 10px; transform: translateY(10px);\"/>");
+            } else {
+                log.error("Image file 'images/선한병원직인.png' not found in resources.");
+                html.append("        <span style=\"margin-left: 15px; font-weight: normal;\">(서명 또는 인)</span>");
+            }
+        } catch (IOException e) {
+            log.error("Error reading image file: " + e.getMessage(), e);
             html.append("        <span style=\"margin-left: 15px; font-weight: normal;\">(서명 또는 인)</span>");
         }
         html.append("        </span>"); // Flexbox 컨테이너 닫기
