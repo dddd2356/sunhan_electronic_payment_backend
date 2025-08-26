@@ -9,9 +9,8 @@ import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Service;
 import sunhan.sunhanbackend.entity.CustomOAuth2User;
-import sunhan.sunhanbackend.entity.UserEntity;
-import sunhan.sunhanbackend.handler.OAuth2SuccessHandler;
-import sunhan.sunhanbackend.respository.UserRepository;
+import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
 import java.util.Optional;
 

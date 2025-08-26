@@ -1,0 +1,74 @@
+{
+  "employerName": "선한병원",
+  "employerAddress": "광주광역시 서구 무진대로 975(광천동)",
+  "employerPhone": "062-466-1000",
+  "employeeName": "",
+  "employeeAddress": "",
+  "employeePhone": "",
+  "employeeSSN": "",
+  "startDate": "",
+  "workTime": "",
+  "contractDate": "",
+  "salaryContractDate": "",
+  "breakTime": "",
+  "totalAnnualSalary": "",
+  "basicSalary": "",
+  "positionAllowance": "",
+  "licenseAllowance": "",
+  "hazardPay": "",
+  "treatmentImprovementExpenses": "",
+  "specialAllowance": "",
+  "adjustmentAllowance": "",
+  "overtimePay": "",
+  "nDutyAllowance": "",
+  "regularHourlyWage": "",
+  "employmentOccupation": "",
+  "dutyNight": "",
+  "overtimeDescription": "",
+  "dutyDescription": "",
+  "receiptConfirmation1": "",
+  "receiptConfirmation2": "",
+  "createdDate": "",
+  "agreements": {
+    "page1": "",
+    "page4": ""
+  },
+  "signatures": {
+    "page1": [
+      {
+        "isSigned": false,
+        "imageUrl": ""
+      }
+    ],
+    "page2": [
+      {
+        "isSigned": false,
+        "imageUrl": ""
+      }
+    ],
+    "page3": [
+      {
+        "isSigned": false,
+        "imageUrl": ""
+      }
+    ],
+    "page4_consent": [
+      {
+        "isSigned": false,
+        "imageUrl": ""
+      }
+    ],
+    "page4_receipt": [
+      {
+        "isSigned": false,
+        "imageUrl": ""
+      }
+    ],
+    "page4_final": [
+      {
+        "isSigned": false,
+        "imageUrl": ""
+      }
+    ]
+  }
+}

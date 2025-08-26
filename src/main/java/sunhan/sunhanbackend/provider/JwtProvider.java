@@ -7,14 +7,10 @@ import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.stereotype.Service;
-import sunhan.sunhanbackend.entity.UserEntity;
 
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import io.jsonwebtoken.Claims;
 
@@ -92,5 +88,4 @@ public class JwtProvider {
         log.info("getAccessTokenExpirationTime: {} seconds", expiresInSeconds);
         return expiresInSeconds; // 3600초 반환
     }
-
 }

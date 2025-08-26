@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ehcache xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="http://ehcache.org/ehcache.xsd"
+         updateCheck="false">
+
+    <!-- 기본 캐시 설정 -->
+    <defaultCache
+            maxElementsInMemory="1000"
+            eternal="false"
+            timeToIdleSeconds="600"
+            timeToLiveSeconds="1200"
+            overflowToDisk="false"
+            memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 사용자 정보 캐시 - 자주 조회되는 데이터 -->
+    <cache name="userCache"
+           maxElementsInMemory="5000"
+           eternal="false"
+           timeToIdleSeconds="300"
+           timeToLiveSeconds="600"
+           overflowToDisk="false"
+           memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 부서별 사용자 캐시 -->
+    <cache name="deptCache"
+           maxElementsInMemory="1000"
+           eternal="false"
+           timeToIdleSeconds="600"
+           timeToLiveSeconds="1200"
+           overflowToDisk="false"
+           memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 부서장 정보 캐시 -->
+    <cache name="deptManagerCache"
+           maxElementsInMemory="500"
+           eternal="false"
+           timeToIdleSeconds="1800"
+           timeToLiveSeconds="3600"
+           overflowToDisk="false"
+           memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 직급별 캐시 -->
+    <cache name="jobLevelCache"
+           maxElementsInMemory="500"
+           eternal="false"
+           timeToIdleSeconds="1800"
+           timeToLiveSeconds="3600"
+           overflowToDisk="false"
+           memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 사용자 권한 캐시 -->
+    <cache name="userRoleCache"
+           maxElementsInMemory="5000"
+           eternal="false"
+           timeToIdleSeconds="300"
+           timeToLiveSeconds="600"
+           overflowToDisk="false"
+           memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 서명 이미지 캐시 - 메모리 사용량 주의 -->
+    <cache name="signatureCache"
+           maxElementsInMemory="1000"
+           eternal="false"
+           timeToIdleSeconds="1800"
+           timeToLiveSeconds="3600"
+           overflowToDisk="true"
+           diskPersistent="false"
+           maxElementsOnDisk="2000"
+           memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 부서 사용자 목록 캐시 -->
+    <cache name="deptUsersCache"
+           maxElementsInMemory="1000"
+           eternal="false"
+           timeToIdleSeconds="600"
+           timeToLiveSeconds="1200"
+           overflowToDisk="false"
+           memoryStoreEvictionPolicy="LRU"/>
+
+    <!-- 부서 사용자 요약 정보 캐시 (DTO) -->
+    <cache name="deptUserSummaryCache"
+           maxElementsInMemory="2000"
+           eternal="false"
+           timeToIdleSeconds="600"
+           timeToLiveSeconds="1200"
+           overflowToDisk="false"
+           memoryStoreEvictionPolicy="LRU"/>
+
+</ehcache>

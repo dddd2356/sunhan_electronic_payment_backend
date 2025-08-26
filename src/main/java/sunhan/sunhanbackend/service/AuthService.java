@@ -3,8 +3,7 @@ package sunhan.sunhanbackend.service;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.ResponseEntity;
-import sunhan.sunhanbackend.dto.request.SignInRequestDto;
-import sunhan.sunhanbackend.dto.response.ResponseDto;
+import sunhan.sunhanbackend.dto.request.auth.SignInRequestDto;
 import sunhan.sunhanbackend.dto.response.auth.SignInResponseDto;
 
 public interface AuthService{

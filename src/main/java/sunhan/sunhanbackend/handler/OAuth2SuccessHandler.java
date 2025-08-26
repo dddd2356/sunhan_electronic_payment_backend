@@ -6,15 +6,13 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
-import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.web.authentication.SimpleUrlAuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
 import sunhan.sunhanbackend.entity.CustomOAuth2User;
-import sunhan.sunhanbackend.entity.UserEntity;
+import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.provider.JwtProvider;
-import sunhan.sunhanbackend.respository.UserRepository;
+import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
 import java.io.IOException;
 import java.util.Optional;

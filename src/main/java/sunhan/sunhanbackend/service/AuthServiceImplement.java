@@ -10,12 +10,12 @@ import org.springframework.http.*;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import sunhan.sunhanbackend.dto.request.SignInRequestDto;
+import sunhan.sunhanbackend.dto.request.auth.SignInRequestDto;
 import sunhan.sunhanbackend.dto.response.ResponseDto;
 import sunhan.sunhanbackend.dto.response.auth.SignInResponseDto;
-import sunhan.sunhanbackend.entity.UserEntity;
+import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.provider.JwtProvider;
-import sunhan.sunhanbackend.respository.UserRepository;
+import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
 
 @Slf4j
@@ -31,7 +31,9 @@ public class AuthServiceImplement implements AuthService {
     public ResponseEntity<? super SignInResponseDto> signIn(SignInRequestDto dto) {
         try {
             String userId = dto.getId();
-            UserEntity userEntity = userRepository.findByUserId(userId);
+            // userRepository.findByUserId()가 Optional을 반환하므로, orElse(null)을 사용해 UserEntity 또는 null을 받습니다.
+            UserEntity userEntity = userRepository.findByUserId(userId).orElse(null);
+
             if (userEntity == null)
                 return SignInResponseDto.signInFail();
 

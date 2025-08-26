@@ -1,0 +1,64 @@
+package sunhan.sunhanbackend.repository.mysql;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
+import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
+import sunhan.sunhanbackend.enums.LeaveType;
+
+import java.time.LocalDate;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+
+@Repository
+public interface LeaveApplicationRepository extends JpaRepository<LeaveApplication, Long> {
+    @EntityGraph(attributePaths = {"applicant", "substitute"})
+    Optional<LeaveApplication> findById(Long id);
+
+    /**
+     * 신청자별 휴가원 조회 (N+1 문제 해결)
+     * @EntityGraph를 사용하여 연관된 applicant와 substitute 엔티티를 함께 조회합니다.
+     */
+    @EntityGraph(value = "LeaveApplication.withApplicantAndSubstitute")
+    Page<LeaveApplication> findByApplicant_UserId(String applicantId, Pageable pageable);
+
+    Page<LeaveApplication> findByCurrentApproverIdAndStatusInOrCurrentApproverIdIsNullAndStatus(
+            String currentApproverId,
+            Set<LeaveApplicationStatus> statuses,
+            LeaveApplicationStatus hrGroupStatus,
+            Pageable pageable
+    );
+
+    // 관리자가 모든 휴가 신청을 조회할 때 N+1 쿼리 방지
+    @EntityGraph(value = "LeaveApplication.withApplicantAndSubstitute")
+    Page<LeaveApplication> findAll(Pageable pageable);
+    /**
+     * 특정 사용자의 특정 상태 휴가 신청 조회
+     */
+    List<LeaveApplication> findByApplicantIdAndStatus(String applicantId, LeaveApplicationStatus status);
+
+    // 🔧 N+1 쿼리 문제 해결: JOIN FETCH를 명시적으로 사용하여 applicant를 한 번에 조회
+    @Query("SELECT la FROM LeaveApplication la JOIN FETCH la.applicant WHERE la.applicant.userId = :userId AND la.status = :status")
+    List<LeaveApplication> findByApplicantIdAndStatusWithApplicant(@Param("userId") String userId, @Param("status") LeaveApplicationStatus status);
+
+    // pending용: 이미 일부 있음, 확장
+    Page<LeaveApplication> findByCurrentApproverIdAndStatusIn(String currentApproverId, Set<LeaveApplicationStatus> statuses, Pageable pageable);
+
+    // completed용: 이미 일부 있음 (findByStatus, findByApplicantIdAndStatusWithPaging), 필요 시 추가
+    @EntityGraph(attributePaths = {"applicant", "substitute"})
+    Page<LeaveApplication> findByStatus(LeaveApplicationStatus status, Pageable pageable);
+
+    // ✨ N+1 문제 해결 및 페이징을 위한 메서드 (명시적 @Query 사용)
+    @EntityGraph(attributePaths = {"applicant", "substitute"})
+    @Query("SELECT la FROM LeaveApplication la WHERE la.applicant.userId = :userId AND la.status = :status")
+    Page<LeaveApplication> findByApplicantIdAndStatusWithPaging(@Param("userId") String userId, @Param("status") LeaveApplicationStatus status, Pageable pageable);
+
+    Page<LeaveApplication> findByStatusIn(Set<LeaveApplicationStatus> statuses, Pageable pageable);
+}

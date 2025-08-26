@@ -9,7 +9,7 @@ version = '0.0.1-SNAPSHOT'
 
 java {
 	toolchain {
-		languageVersion = JavaLanguageVersion.of(17)
+		languageVersion = JavaLanguageVersion.of(24)
 	}
 }
 
@@ -24,23 +24,43 @@ repositories {
 }
 
 dependencies {
+	// ✅ [추가] Jackson이 Hibernate의 지연 로딩을 처리하도록 돕는 모듈
+	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-hibernate6'
+
+	implementation 'javax.cache:cache-api:1.1.1'
+	implementation 'org.hibernate:hibernate-jcache:6.6.15.Final'
+	// JCache 구현체 (Ehcache)
+	implementation 'org.ehcache:ehcache:3.10.8:jakarta'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	compileOnly 'org.projectlombok:lombok'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	// 오라클 드라이버
 	implementation 'com.oracle.database.jdbc:ojdbc8'
 	runtimeOnly 'com.mysql:mysql-connector-j'
 	annotationProcessor 'org.projectlombok:lombok'
+	implementation 'org.springframework.boot:spring-boot-starter-cache'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testImplementation 'org.springframework.security:spring-security-test'
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.8'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	implementation group: 'io.jsonwebtoken', name: 'jjwt-api', version: '0.11.2'
 	implementation group: 'io.jsonwebtoken', name: 'jjwt-impl', version: '0.11.2'
 	implementation group: 'io.jsonwebtoken', name: 'jjwt-jackson', version: '0.11.2'
-//	implementation 'org.mariadb.jdbc:mariadb-java-client:3.1.4'
+	// Thymeleaf 템플릿 엔진 (HTML 템플릿을 사용하여 동적 HTML 생성)
+	implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+	// PDF 생성용 iText 7
+	implementation 'com.itextpdf:kernel:7.2.5'
+	implementation 'com.itextpdf:layout:7.2.5'
+	// PDF 이미지화용 Apache PDFBox
+	implementation 'org.apache.pdfbox:pdfbox:2.0.28'
+// Java 8/11+ 시간 타입 지원
+	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+	//pdf 업로드
+	implementation 'com.openhtmltopdf:openhtmltopdf-pdfbox:1.0.10'
 }
 
 tasks.named('test') {

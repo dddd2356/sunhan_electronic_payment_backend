@@ -31,13 +31,18 @@ import sunhan.sunhanbackend.service.AuthService;
 
 import java.io.IOException;
 
-@Configurable
 @Configuration
 @EnableWebSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    // 1) BCryptPasswordEncoder 빈 등록
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        int strength = 10;  // 4~31 사이의 log rounds (기본 10). 높일수록 안전하지만 연산비 ↑
+        return new BCryptPasswordEncoder(strength);
+    }
 
     @Bean  // HTTP 보안 관련 설정을 구성하는 메서드
     protected SecurityFilterChain configure(HttpSecurity httpSecurity) throws Exception{
@@ -56,17 +61,25 @@ public class SecurityConfig {
 
                 // URL 별 접근 권한 설정
                 .authorizeHttpRequests(request -> request
-                        // 정적 리소스 허용
-                        .requestMatchers("/", "/api/**", "/api/auth/**", "/api/user/**", "/api/v1/user/**", "/api/v1/auth/**").permitAll()  // 누구나 접근 가능한 URL
-                        .requestMatchers("/api/admin/**").hasRole("2")  // ADMIN 역할만 접근 가능
-                        .requestMatchers("/ws/**").permitAll() // Or .hasRole("ROLE_USER")
+                        // 1. 가장 구체적인 규칙(관리자)을 먼저 정의합니다.
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+
+                        // 2. 인증 없이 접근 가능한 공개 경로들을 명확하게 명시합니다.
+                        // "/api/**"와 같이 광범위한 패턴 대신 필요한 경로만 permitAll 처리합니다.
                         .requestMatchers(
-                                "/practice-ui.html",
+                                "/",
+                                "/uploads/**",
+                                "/api/auth/**",      // 인증 (로그인/가입)
+                                "/api/v1/auth/**",
+                                "/api/v1/user/**",   // 사용자 정보 관련 (기존 설정 유지)
+                                "/api/user/**",      // 사용자 정보 관련 (기존 설정 유지)
+                                "/practice-ui.html", // Swagger 및 API 문서
                                 "/swagger-ui.html",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
                                 "/api-docs/**"
                         ).permitAll()
+
                         .anyRequest().authenticated()  // 나머지 요청은 인증된 사용자만 접근 가능
                 )
 

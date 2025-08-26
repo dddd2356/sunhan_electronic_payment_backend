@@ -15,11 +15,11 @@ import org.springframework.security.web.authentication.WebAuthenticationDetailsS
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
-import sunhan.sunhanbackend.entity.UserEntity;
-import sunhan.sunhanbackend.respository.UserRepository;
-import sunhan.sunhanbackend.service.AuthService;
+import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.Role;
+import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.provider.JwtProvider;
-
+import sunhan.sunhanbackend.service.UserService;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +30,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtProvider jwtProvider;
     private final UserRepository userRepository;
-
+    private final UserService userService;
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -52,16 +52,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            UserEntity userEntity = userRepository.findByUserId(userId);
+            UserEntity userEntity = userRepository.findByUserId(userId).orElse(null);
             if (userEntity == null) {
                 filterChain.doFilter(request, response);
                 return;
             }
-
-            String rawRole       = userEntity.getRoleForSecurity();      // ex. "2"
-            //String formattedRole = "ROLE_" + rawRole;                     // → "ROLE_2"
+            // 🔥 Role 기반 권한 설정으로 변경
             List<GrantedAuthority> authorities = new ArrayList<>();
-            authorities.add(new SimpleGrantedAuthority(rawRole));
+
+            // 1) DB의 role 필드로만 ADMIN/USER 권한 부여
+            Role r = userEntity.getRole();
+            if (r != null) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_" + r));
+            }
+
+            // 2) jobLevel=1 에게만 Dept Approver 권한 추가
+            if ("1".equals(userEntity.getJobLevel())) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_DEPT_APPROVER"));
+            }
 
             AbstractAuthenticationToken authenticationToken =
                     new UsernamePasswordAuthenticationToken(userId, null, authorities);
