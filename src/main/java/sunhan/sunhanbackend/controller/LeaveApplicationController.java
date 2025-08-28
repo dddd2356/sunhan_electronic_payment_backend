@@ -21,7 +21,9 @@ import sunhan.sunhanbackend.dto.request.*;
 import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.service.LeaveApplicationService;
+import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.UserService;
 
 import java.util.*;
@@ -36,6 +38,7 @@ public class LeaveApplicationController {
     private final LeaveApplicationService leaveApplicationService;
     private final UserService userService;
     private final ObjectMapper objectMapper; // ObjectMapper 주입
+    private final PermissionService permissionService;
 
     /**
      * 내 휴가원 목록 조회
@@ -592,7 +595,7 @@ public class LeaveApplicationController {
 
                 case "hrStaff":
                     return "0".equals(user.getJobLevel())
-                            && "AD".equals(user.getDeptCode())  // jobType → deptCode로 변경
+                            && permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION)
                             && user.isAdmin();
                 case "centerDirector":
                     // 센터장 권한 체크 (jobLevel 2 이상)

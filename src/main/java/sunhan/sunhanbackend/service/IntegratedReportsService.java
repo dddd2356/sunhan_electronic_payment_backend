@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 import sunhan.sunhanbackend.dto.response.ReportsResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.ContractType;
+import sunhan.sunhanbackend.enums.PermissionType;
+import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.repository.mysql.ReportsRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
@@ -23,6 +25,7 @@ public class IntegratedReportsService {
 
     private final ReportsRepository reportsRepository;
     private final UserRepository userRepository;
+    private final PermissionService permissionService;
     /**
      * 상태별 통합 문서 조회 (모든 상태에 대해 DB 레벨 최적화 적용)
      */
@@ -63,47 +66,50 @@ public class IntegratedReportsService {
                 // 1. 현재 사용자 정보 조회
                 UserEntity currentUser = userRepository.findByUserId(userId).orElse(null);
 
-                // 2. 인사팀 소속인지 확인하는 로직 추가
+                // 2. 인사팀 권한 확인
+                boolean hasHrContractPermission = permissionService.hasPermission(userId, PermissionType.HR_CONTRACT);
+                boolean hasHrLeavePermission = permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION);
+
+                // 3. 인사팀 소속 여부 판단 (jobLevel 0 또는 1, ADMIN 권한)
                 boolean isHrStaff = currentUser != null &&
                         ("0".equals(currentUser.getJobLevel()) || "1".equals(currentUser.getJobLevel())) &&
-                        "AD".equals(currentUser.getDeptCode());
+                        currentUser.getRole() == Role.ADMIN &&
+                        (hasHrContractPermission || hasHrLeavePermission);
 
                 if (isHrStaff) {
-                    // 인사팀은 두 가지를 모두 조회: 개인 할당 문서 + PENDING_HR_STAFF 문서
-                    // 우선 개인 할당 문서 조회
-                    List<Object[]> personalResults = reportsRepository.findPendingDocuments(userId, limit, offset);
-                    List<Object[]> hrStaffResults = reportsRepository.findPendingHrStaffDocuments(limit, offset);
-
-                    // 중복 제거하면서 합치기 (ID 기준)
                     Set<Long> addedIds = new HashSet<>();
                     List<Object[]> combinedResults = new ArrayList<>();
 
-                    for (Object[] result : personalResults) {
-                        Long id = ((Number) result[1]).longValue();
-                        if (addedIds.add(id)) {
-                            combinedResults.add(result);
+                    // HR_CONTRACT 권한이 있으면 근로계약서 문서 조회
+                    if (hasHrContractPermission) {
+                        List<Object[]> contractResults = reportsRepository.findPendingDocuments(userId, limit, offset);
+                        for (Object[] r : contractResults) {
+                            Long id = ((Number) r[1]).longValue();
+                            if (addedIds.add(id)) combinedResults.add(r);
                         }
                     }
 
-                    for (Object[] result : hrStaffResults) {
-                        Long id = ((Number) result[1]).longValue();
-                        if (addedIds.add(id)) {
-                            combinedResults.add(result);
+                    // HR_LEAVE_APPLICATION 권한이 있으면 휴가원 문서 조회
+                    if (hasHrLeavePermission) {
+                        List<Object[]> leaveResults = reportsRepository.findPendingHrStaffDocuments(limit, offset);
+                        for (Object[] r : leaveResults) {
+                            Long id = ((Number) r[1]).longValue();
+                            if (addedIds.add(id)) combinedResults.add(r);
                         }
                     }
 
-                    // 정렬 (updated_at 기준 내림차순)
-                    combinedResults.sort((a, b) -> {
-                        Timestamp timeA = (Timestamp) a[3];
-                        Timestamp timeB = (Timestamp) b[3];
-                        return timeB.compareTo(timeA);
-                    });
+                    // updated_at 기준 내림차순 정렬
+                    combinedResults.sort((a, b) -> ((Timestamp) b[3]).compareTo((Timestamp) a[3]));
 
                     results = combinedResults;
-                    totalCount = reportsRepository.countPendingDocuments(userId) +
-                            reportsRepository.countPendingHrStaffDocuments();
+
+                    // totalCount 계산
+                    totalCount = 0;
+                    if (hasHrContractPermission) totalCount += reportsRepository.countPendingDocuments(userId);
+                    if (hasHrLeavePermission) totalCount += reportsRepository.countPendingHrStaffDocuments();
+
                 } else {
-                    // 그 외 사용자는 기존 로직 유지 (자신에게 할당된 문서만 조회)
+                    // 그 외 사용자는 자신에게 할당된 문서만 조회
                     results = reportsRepository.findPendingDocuments(userId, limit, offset);
                     totalCount = reportsRepository.countPendingDocuments(userId);
                 }
@@ -132,18 +138,30 @@ public class IntegratedReportsService {
 
         // 1. 현재 사용자 정보 조회
         UserEntity currentUser = userRepository.findByUserId(userId).orElse(null);
+
+        boolean hasHrContractPermission = permissionService.hasPermission(userId, PermissionType.HR_CONTRACT);
+        boolean hasHrLeavePermission = permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION);
+
         // 2. 인사팀 소속인지 확인하는 로직 추가
         boolean isHrStaff = currentUser != null &&
                 ("0".equals(currentUser.getJobLevel()) || "1".equals(currentUser.getJobLevel())) &&
-                "AD".equals(currentUser.getDeptCode());
+                currentUser.getRole() == Role.ADMIN &&
+                (hasHrContractPermission || hasHrLeavePermission);
 
+        long pendingCount = 0;
         if (isHrStaff) {
-            long personalPendingCount = reportsRepository.countPendingDocuments(userId);
-            long hrStaffPendingCount = reportsRepository.countPendingHrStaffDocuments();
-            counts.put("pendingCount", personalPendingCount + hrStaffPendingCount);
+            // 권한별로 문서 수 합산
+            if (hasHrContractPermission) {
+                pendingCount += reportsRepository.countPendingDocuments(userId);
+            }
+            if (hasHrLeavePermission) {
+                pendingCount += reportsRepository.countPendingHrStaffDocuments();
+            }
         } else {
-            counts.put("pendingCount", reportsRepository.countPendingDocuments(userId));
+            pendingCount = reportsRepository.countPendingDocuments(userId);
         }
+        counts.put("pendingCount", pendingCount);
+
         // completed는 관리자 여부에 따라 다르게 조회
         counts.put("completedCount", reportsRepository.countCompletedDocuments(userId, isAdmin));
 

@@ -23,10 +23,7 @@ import sunhan.sunhanbackend.dto.request.SignLeaveApplicationRequestDto;
 import sunhan.sunhanbackend.dto.response.ReportsResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
-import sunhan.sunhanbackend.enums.ContractType;
-import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
-import sunhan.sunhanbackend.enums.LeaveType;
-import sunhan.sunhanbackend.enums.Role;
+import sunhan.sunhanbackend.enums.*;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
@@ -55,6 +52,8 @@ public class LeaveApplicationService {
     private final UserService userService;
     private static final DateTimeFormatter ISO_LOCAL = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private final PdfGenerationService pdfGenerationService; // 비동기 서비스 주입
+    private final PermissionService permissionService;
+
     private String toIsoString(Object maybeDate) {
         if (maybeDate == null) return LocalDateTime.now().format(ISO_LOCAL);
 
@@ -254,7 +253,7 @@ public class LeaveApplicationService {
                         && "DEPARTMENT_HEAD_APPROVAL".equals(step);
             case "hrStaff":
                 return ("0".equals(signer.getJobLevel()) || "1".equals(signer.getJobLevel()))
-                        && "AD".equals(signer.getDeptCode())
+                        && permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION)
                         && signer.isAdmin()
                         && "HR_STAFF_APPROVAL".equals(step);
             case "centerDirector":
@@ -446,7 +445,9 @@ public class LeaveApplicationService {
 
         String currentStep = application.getCurrentApprovalStep();
         boolean isHrFinalStep = "HR_FINAL_APPROVAL".equals(currentStep) || "PENDING_HR_FINAL".equals(currentStep);
-        boolean isHrAdmin = "AD".equals(approver.getDeptCode()) && approver.getRole() == Role.ADMIN;
+        boolean isHrAdmin = approver.getRole() == Role.ADMIN &&
+                permissionService.hasPermission(approverId, PermissionType.HR_LEAVE_APPLICATION);
+
 
         if (jobLevel < 2 && !(isHrFinalStep && isHrAdmin)) {
             throw new AccessDeniedException("전결 승인 권한이 없습니다.");
@@ -487,7 +488,7 @@ public class LeaveApplicationService {
                 application.setIsAdminDirectorApproved(true);
                 application.setIsCeoDirectorApproved(true);
                 break;
-            case "HR_FINAL_APPROVAL": // 새로 추가
+            case "HR_FINAL_APPROVAL":
                 application.setIsHrFinalApproved(true);
                 application.setIsAdminDirectorApproved(true);
                 application.setIsCeoDirectorApproved(true);
@@ -735,7 +736,8 @@ public class LeaveApplicationService {
         else if (LeaveApplicationStatus.PENDING_HR_STAFF.equals(application.getStatus())) {
             // 인사팀(AD) 부서 소속이며, 특정 권한을 가진 사용자인지 확인
             // 예시: jobLevel 0 또는 1
-            boolean isHrGroupApprover = "AD".equals(approver.getDeptCode()) && Arrays.asList("0", "1").contains(approver.getJobLevel());
+            boolean isHrGroupApprover = Arrays.asList("0", "1").contains(approver.getJobLevel()) &&
+                    permissionService.hasPermission(approverId, PermissionType.HR_LEAVE_APPLICATION);
             if (isHrGroupApprover) {
                 isAuthorized = true;
             }
@@ -1039,7 +1041,7 @@ public class LeaveApplicationService {
         Page<LeaveApplication> page;
 
         // 3. 사용자가 인사팀("AD") 소속인지에 따라 다른 쿼리 로직을 실행합니다.
-        if ("AD".equals(userDeptCode)) {
+        if (permissionService.hasPermission(approverId, PermissionType.HR_LEAVE_APPLICATION)) {
             page = leaveApplicationRepository.findByStatusIn(
                     Set.of(LeaveApplicationStatus.PENDING_HR_STAFF, LeaveApplicationStatus.PENDING_HR_FINAL),
                     pageable
@@ -1059,6 +1061,7 @@ public class LeaveApplicationService {
             return LeaveApplicationResponseDto.fromEntity(app, applicant, substitute);
         });
     }
+
     /**
      * 특정 휴가원 엔티티 가져오기 (내부용)
      */
@@ -1265,8 +1268,9 @@ public class LeaveApplicationService {
                 // 1. 현재 신청자(applicantId)의 사용자 정보 조회
                 Optional<UserEntity> applicantUser = userRepository.findByUserId(applicantId);
 
-                // 2. 신청자가 인사팀(AD) 소속인지 확인
-                boolean isApplicantInHR = applicantUser.isPresent() && "AD".equals(applicantUser.get().getDeptCode());
+                // 2. 신청자가 인사팀 권한이 있는 소속인지 확인
+                boolean isApplicantInHR = applicantUser.isPresent() &&
+                        permissionService.hasPermission(applicantUser.get().getUserId(), PermissionType.HR_LEAVE_APPLICATION);
 
                 // 3. 신청자가 인사팀 소속일 경우, 다음 승인자를 null로 설정하여 그룹 승인 대기로 표시
                 if (isApplicantInHR) {
@@ -1471,13 +1475,13 @@ public class LeaveApplicationService {
                         && approver.getDeptCode().equals(applicant.getDeptCode());
             case "HR_STAFF_APPROVAL":
                 return ("0".equals(approver.getJobLevel()) ||"1".equals(approver.getJobLevel()))
-                        && "AD".equals(approver.getDeptCode())
+                        && permissionService.hasPermission(approver.getUserId(), PermissionType.HR_LEAVE_APPLICATION)
                         && approver.isAdmin();
             case "CENTER_DIRECTOR_APPROVAL":
                 return "2".equals(approver.getJobLevel());
             case "HR_FINAL_APPROVAL":
                 return ("0".equals(approver.getJobLevel()) || "1".equals(approver.getJobLevel()))
-                        && "AD".equals(approver.getDeptCode())
+                        && permissionService.hasPermission(approver.getUserId(), PermissionType.HR_LEAVE_APPLICATION)
                         && approver.isAdmin();
             case "ADMIN_DIRECTOR_APPROVAL":
                 return "4".equals(approver.getJobLevel());
@@ -1503,7 +1507,8 @@ public class LeaveApplicationService {
         UserEntity currentUser = userService.getUserInfo(userId);
         Page<LeaveApplication> page;
 
-        boolean isHrStaff = currentUser.isAdmin() && ("0".equals(currentUser.getJobLevel()) || "1".equals(currentUser.getJobLevel()))&& "AD".equals(currentUser.getDeptCode());
+        boolean isHrStaff = currentUser.isAdmin() && ("0".equals(currentUser.getJobLevel()) || "1".equals(currentUser.getJobLevel()))
+                && permissionService.hasPermission(currentUser.getUserId(), PermissionType.HR_LEAVE_APPLICATION);
         boolean isCenterDirector = currentUser.isAdmin() && currentUser.getJobLevel() != null && Integer.parseInt(currentUser.getJobLevel()) >= 2;
 
         if (isHrStaff || isCenterDirector) {

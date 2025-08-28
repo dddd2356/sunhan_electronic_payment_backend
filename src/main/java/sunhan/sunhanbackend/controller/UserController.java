@@ -12,6 +12,7 @@ import org.springframework.web.multipart.MultipartFile;
 import sunhan.sunhanbackend.dto.request.UpdateProfileRequestDto;
 import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
 import sunhan.sunhanbackend.dto.response.ReportsResponseDto;
+import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.ContractType;
@@ -39,21 +40,14 @@ public class UserController {
     private final LeaveApplicationService leaveApplicationService;
 
     @GetMapping("/me")
-    public ResponseEntity<UserEntity> getCurrentUser(Authentication authentication) {
+    public ResponseEntity<UserResponseDto> getCurrentUser(Authentication authentication) {
         if (authentication == null || !authentication.isAuthenticated()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        try {
-            String userId = (String) authentication.getPrincipal();
-            UserEntity user = userService.getUserInfo(userId);
-            return ResponseEntity.ok(user);
-        } catch (RuntimeException e) {
-            // getUserInfo에서 "User not found" 예외가 발생하는 경우
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
-        }
+        String userId = (String) authentication.getPrincipal();
+        UserResponseDto dto = userService.getUserWithPermissions(userId);
+        return ResponseEntity.ok(dto);
     }
 
     @GetMapping("/role/{userId}")

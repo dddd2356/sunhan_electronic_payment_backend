@@ -15,9 +15,11 @@ import sunhan.sunhanbackend.dto.request.auth.RejectRequestDto;
 import sunhan.sunhanbackend.dto.response.ContractResponseDto;
 import sunhan.sunhanbackend.entity.mysql.EmploymentContract;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.service.ContractService;
 import sunhan.sunhanbackend.service.FormService;
+import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.UserService;
 
 import java.io.IOException;
@@ -32,6 +34,7 @@ public class EmploymentContractController {
     private final ContractService service;
     private final FormService formService;
     private final UserService userService;
+    private final PermissionService permissionService;
 
     // 근로계약서 목록 조회
     @GetMapping
@@ -40,7 +43,8 @@ public class EmploymentContractController {
         UserEntity user = userService.getUserInfo(userId);
         boolean isAdmin = (user.getRole() == Role.ADMIN)
                 || Integer.parseInt(user.getJobLevel()) >= 2
-                || ("0".equals(user.getJobLevel()) || "1".equals(user.getJobLevel())) && "AD".equals(user.getDeptCode());
+                || (("0".equals(user.getJobLevel()) || "1".equals(user.getJobLevel())) &&
+                permissionService.hasPermission(userId, PermissionType.HR_CONTRACT));
         return service.getEmploymentContracts(userId, isAdmin);
     }
 

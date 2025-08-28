@@ -24,7 +24,12 @@ public interface EmploymentContractRepository extends JpaRepository<EmploymentCo
     @EntityGraph(attributePaths = {"creator", "employee"})
     Page<EmploymentContract> findByCreator_UserIdOrEmployee_UserIdAndStatusIn(
             String creatorUserId, String employeeUserId, Set<ContractStatus> statuses, Pageable pageable);
-
+    @EntityGraph("EmploymentContract.withUsers")
+    @Query("SELECT ec FROM EmploymentContract ec " +
+            "WHERE ec.status = :status " +
+            "AND (ec.employee.userId = :userId OR ec.creator.userId = :userId)")
+    List<EmploymentContract> findByUserIdAndStatusWithUsers(@Param("userId") String userId,
+                                                            @Param("status") ContractStatus status);
     // 페이징 가능한 전체 조회
     @EntityGraph("EmploymentContract.withUsers")
     @Query("SELECT ec FROM EmploymentContract ec")

@@ -10,8 +10,10 @@ import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByConditionDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByUserIdDto;
 import sunhan.sunhanbackend.dto.request.permissions.UpdateJobLevelRequestDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.provider.JwtProvider;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
+import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.UserService;
 
 import java.util.HashMap;
@@ -25,12 +27,14 @@ public class AdminController {
     private final UserService userService;  // UserService 주입
     private final UserRepository userRepository;
     private final JwtProvider jwtProvider;  // JwtProvider 변수 선언
+    private final PermissionService permissionService;
 
     @Autowired
-    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider) {
+    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider, PermissionService permissionService) {
         this.userService = userService;
         this.userRepository = userRepository;  // 생성자 주입
         this.jwtProvider = jwtProvider;
+        this.permissionService = permissionService;
     }
 
     /**
@@ -289,14 +293,13 @@ public class AdminController {
 
             // 문자열을 정수로 변환하여 비교
             int adminLevel = Integer.parseInt(admin.getJobLevel());
-            String jobType = admin.getJobType();
 
             if (adminLevel == 1) {
                 // jobLevel 1인 경우 부서 내 사용자만 조회
                 List<UserEntity> deptUsers = userService.getUsersByDeptCode(adminUserId, admin.getDeptCode());
                 System.out.println("Found department users: " + deptUsers.size());
                 return ResponseEntity.ok(deptUsers);
-            }else if (adminLevel == 0 && "AD".equalsIgnoreCase(admin.getDeptCode().trim())) {
+            }else if ((adminLevel == 0 || adminLevel == 1) && permissionService.hasPermission(adminUserId, PermissionType.MANAGE_USERS)) {
                 // jobLevel 0이면서 deptCode가 AD인 경우
                 List<UserEntity> manageableUsers = userService.getManageableUsers(adminUserId);
                 System.out.println("Found manageable users: " + manageableUsers.size());
@@ -319,5 +322,4 @@ public class AdminController {
                     .body(Map.of("error", e.getMessage()));
         }
     }
-
 }

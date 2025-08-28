@@ -41,7 +41,7 @@ public class OracleService {
             // 1. Oracle에서 사용자 정보 조회
             OracleEntity oracleUser = getOracleUserInfo(usrId);
 
-            // ⭐ 추가된 로직: Oracle 사용자의 useFlag가 '1'(활성 상태)인지 확인
+            // Oracle 사용자의 useFlag가 '1'(활성 상태)인지 확인
             if (!"1".equals(oracleUser.getUseFlag())) {
                 log.warn("Oracle 사용자가 비활성 상태(useFlag != '1')이므로 마이그레이션을 중단합니다. userId: {}", usrId);
                 throw new RuntimeException("비활성 상태의 사용자입니다.");
@@ -62,7 +62,6 @@ public class OracleService {
             newUser.setJobType(oracleUser.getJobType());
             newUser.setDeptCode(oracleUser.getDeptCode());
             newUser.setUseFlag(oracleUser.getUseFlag());
-            newUser.setUseFlag("1"); // 기본값으로 활성 상태 설정
 
             // jobType 값에 따라 jobLevel 설정
             if ("0".equals(oracleUser.getJobType())) {

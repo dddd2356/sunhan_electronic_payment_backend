@@ -388,11 +388,10 @@ public class ContractService {
     public List<ContractResponseDto> getCompletedContracts(String userId, boolean isAdmin) {
         List<EmploymentContract> contracts;
         if (isAdmin) {
-            // ✅ @EntityGraph가 적용된 상태별 조회 호출
             contracts = repo.findByStatusWithUsers(ContractStatus.COMPLETED);
         } else {
-            // ✅ 직원이 대상자인 완료된 계약서만 조회
-            contracts = repo.findByEmployee_UserIdAndStatus(userId, ContractStatus.COMPLETED);
+            // ✅ employee 또는 creator 둘 다 가능하게 변경
+            contracts = repo.findByUserIdAndStatusWithUsers(userId, ContractStatus.COMPLETED);
         }
 
         return contracts.stream()

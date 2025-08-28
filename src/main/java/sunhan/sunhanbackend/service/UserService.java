@@ -12,7 +12,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import org.springframework.cache.annotation.Cacheable;
@@ -25,6 +27,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 @Slf4j
 @Service
@@ -33,14 +36,16 @@ public class UserService {
     private final UserRepository userRepository;
     private final OracleService oracleService;
     private final PasswordEncoder passwdEncoder = new BCryptPasswordEncoder();
+    private final PermissionService permissionService;
 
     @Value("${file.upload.sign-dir}")
     private String uploadDir;  // "/uploads/signatures/"
 
     @Autowired
-    public UserService(UserRepository userRepository, OracleService oracleService) {
+    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService) {
         this.userRepository = userRepository;
         this.oracleService = oracleService;
+        this.permissionService = permissionService;
     }
 
     /**
@@ -53,7 +58,36 @@ public class UserService {
                 .orElseThrow(() -> new EntityNotFoundException("User not found: " + userId));
     }
 
+    @Transactional(readOnly = true)
+    public UserResponseDto getUserWithPermissions(String userId) {
+        UserEntity user = getUserInfo(userId);
 
+        UserResponseDto dto = new UserResponseDto();
+        dto.setUserId(user.getUserId());
+        dto.setUserName(user.getUserName());
+        dto.setDeptCode(user.getDeptCode());
+        dto.setJobLevel(user.getJobLevel());
+        dto.setPhone(user.getPhone());
+        dto.setAddress(user.getAddress());
+        dto.setRole(user.getRole() != null ? user.getRole().toString() : null);
+
+        // 🔹 엔티티를 String으로 변환
+        List<String> userPerms = permissionService.getUserPermissions(userId).stream()
+                .map(up -> up.getPermissionType().toString())
+                .toList();
+
+        List<String> deptPerms = permissionService.getDeptPermissions(user.getDeptCode()).stream()
+                .map(dp -> dp.getPermissionType().toString())
+                .toList();
+
+        dto.setPermissions(
+                Stream.concat(userPerms.stream(), deptPerms.stream())
+                        .distinct()
+                        .toList()
+        );
+
+        return dto;
+    }
     // 모든 유저 조회 메서드
     /**
      * 캐시 테스트용 메서드
@@ -417,11 +451,11 @@ public class UserService {
         if (newLevel >= 2) {
             target.setRole(Role.ADMIN);
         } else if (target.getRole() == Role.ADMIN && newLevel < 2) {
-            // JobLevel이 2 미만으로 내려가면 USER로 변경 (단, 별도 ADMIN 권한이 있을 수 있으므로 확인 필요)
-            target.setRole(Role.USER);
+            log.info("사용자 {} jobLevel이 {}로 변경되었으나 role은 변경하지 않습니다 (자동 강등 방지).",
+            targetUserId, newJobLevel);
         }
 
-        userRepository.save(target);
+        userRepository.saveAndFlush(target);
         log.info("사용자 {}가 {}의 JobLevel을 {}에서 {}로 변경",
                 adminUserId, targetUserId, oldJobLevel, newJobLevel);
     }
@@ -483,8 +517,10 @@ public class UserService {
             return !managerUserId.equals(targetUserId);
         }
 
-        if (manager.getRole() == Role.ADMIN && managerLevel == 0 && "AD".equalsIgnoreCase(manager.getDeptCode().trim())) {
-            return !managerUserId.equals(targetUserId);
+        if (manager.getRole() == Role.ADMIN && (managerLevel == 0 || managerLevel == 1)) {
+            boolean hasLeavePermission = permissionService.hasPermission(managerUserId, PermissionType.HR_LEAVE_APPLICATION);
+            boolean hasContractPermission = permissionService.hasPermission(managerUserId, PermissionType.HR_CONTRACT);
+            return hasLeavePermission || hasContractPermission;
         }
 
         if (manager.getRole() == Role.ADMIN && managerLevel == 1) {

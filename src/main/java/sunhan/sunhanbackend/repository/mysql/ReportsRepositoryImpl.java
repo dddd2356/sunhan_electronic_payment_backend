@@ -270,7 +270,7 @@ public class ReportsRepositoryImpl implements ReportsRepository {
         FROM leave_application la
         WHERE la.current_approver_id = :userId
           AND la.status IN ('PENDING_SUBSTITUTE', 'PENDING_DEPT_HEAD', 'PENDING_CENTER_DIRECTOR',
-                           'PENDING_ADMIN_DIRECTOR', 'PENDING_CEO_DIRECTOR')
+                           'PENDING_ADMIN_DIRECTOR', 'PENDING_CEO_DIRECTOR', 'PENDING_HR_STAFF', 'PENDING_HR_FINAL')
     ) combined_docs
 """;
 
@@ -287,7 +287,7 @@ public class ReportsRepositoryImpl implements ReportsRepository {
             applicant.name as employee_name
         FROM leave_application la
         JOIN usrmst applicant ON la.applicant_id = applicant.id
-        WHERE la.status = 'PENDING_HR_STAFF'
+        WHERE la.status IN ('PENDING_HR_STAFF', 'PENDING_HR_FINAL')  -- 수정됨
         ORDER BY updated_at DESC
         LIMIT :limit OFFSET :offset
     """;
@@ -296,7 +296,7 @@ public class ReportsRepositoryImpl implements ReportsRepository {
     private static final String COUNT_PENDING_HR_STAFF_DOCUMENTS_QUERY = """
         SELECT COUNT(*)
         FROM leave_application la
-        WHERE la.status = 'PENDING_HR_STAFF'
+        WHERE la.status IN ('PENDING_HR_STAFF', 'PENDING_HR_FINAL')  -- 수정됨
     """;
 
     @Override
