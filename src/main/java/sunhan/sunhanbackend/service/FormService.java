@@ -229,7 +229,9 @@ public class FormService {
             objectNode.put("startDate", application.getStartDate() != null ? application.getStartDate().toString() : null);
             objectNode.put("endDate", application.getEndDate() != null ? application.getEndDate().toString() : null);
             objectNode.put("totalDays", application.getTotalDays());
-            objectNode.put("applicationDate", application.getApplicationDate() != null ? application.getApplicationDate().toString() : null);
+            if (!objectNode.has("applicationDate")) {
+                objectNode.put("applicationDate", application.getApplicationDate() != null ? application.getApplicationDate().toString() : null);
+            }
             objectNode.put("status", application.getStatus() != null ? application.getStatus().name() : null);
             objectNode.put("currentApprovalStep", application.getCurrentApprovalStep());
             objectNode.put("rejectionReason", application.getRejectionReason());

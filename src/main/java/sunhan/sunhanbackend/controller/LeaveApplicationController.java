@@ -6,18 +6,18 @@ import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import sunhan.sunhanbackend.dto.request.*;
+import sunhan.sunhanbackend.dto.response.AttachmentResponseDto;
 import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
@@ -26,6 +26,7 @@ import sunhan.sunhanbackend.service.LeaveApplicationService;
 import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.UserService;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -682,6 +683,77 @@ public class LeaveApplicationController {
         } catch (Exception e) {
             log.error("getSubstituteCandidates failed for {}: {}", userId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "대직자 후보 조회 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 휴가원 첨부파일 업로드
+     */
+    @PostMapping("/{id}/attachments")
+    public ResponseEntity<?> uploadAttachment(
+            @PathVariable Long id,
+            @RequestParam("file") MultipartFile file,
+            Authentication auth) {
+        try {
+            String userId = auth.getName();
+            AttachmentResponseDto attachmentDto = leaveApplicationService.addAttachment(id, userId, file);
+            return ResponseEntity.status(HttpStatus.CREATED).body(attachmentDto);
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("첨부파일 업로드 실패: leaveApplicationId={}, fileName={}", id, file.getOriginalFilename(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "파일 업로드 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 휴가원 첨부파일 삭제
+     */
+    @DeleteMapping("/{id}/attachments/{attachmentId}")
+    public ResponseEntity<?> deleteAttachment(
+            @PathVariable Long id,
+            @PathVariable Long attachmentId,
+            Authentication auth) {
+        try {
+            String userId = auth.getName();
+            leaveApplicationService.deleteAttachment(id, attachmentId, userId);
+            return ResponseEntity.ok(Map.of("message", "첨부파일이 성공적으로 삭제되었습니다."));
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (EntityNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("첨부파일 삭제 실패: leaveApplicationId={}, attachmentId={}", id, attachmentId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "파일 삭제 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 휴가원 첨부파일 다운로드
+     */
+    @GetMapping("/attachments/{attachmentId}/download")
+    public ResponseEntity<Resource> downloadAttachment(@PathVariable Long attachmentId) {
+        try {
+            // 파일 정보를 먼저 조회하여 원본 파일 이름을 가져옴
+            String originalFileName = leaveApplicationService.getAttachmentInfo(attachmentId).getOriginalFileName();
+            Resource resource = leaveApplicationService.loadFileAsResource(attachmentId);
+
+            // 한글 파일 이름이 깨지지 않도록 Content-Disposition 헤더 설정
+            ContentDisposition contentDisposition = ContentDisposition.builder("attachment")
+                    .filename(originalFileName, StandardCharsets.UTF_8)
+                    .build();
+
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM) // 범용적인 이진 파일 타입
+                    .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition.toString())
+                    .body(resource);
+
+        } catch (EntityNotFoundException e) {
+            log.error("다운로드할 파일을 찾을 수 없음: attachmentId={}", attachmentId, e);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        } catch (Exception e) {
+            log.error("파일 다운로드 실패: attachmentId={}", attachmentId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
 }

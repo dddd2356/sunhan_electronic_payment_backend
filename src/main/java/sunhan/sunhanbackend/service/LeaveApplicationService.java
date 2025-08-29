@@ -8,7 +8,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
@@ -16,18 +19,27 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.multipart.MultipartFile;
 import sunhan.sunhanbackend.dto.request.LeaveSummaryDto;
+import sunhan.sunhanbackend.dto.response.AttachmentResponseDto;
 import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
 import sunhan.sunhanbackend.dto.request.LeaveApplicationUpdateFormRequestDto;
 import sunhan.sunhanbackend.dto.request.SignLeaveApplicationRequestDto;
 import sunhan.sunhanbackend.dto.response.ReportsResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
+import sunhan.sunhanbackend.entity.mysql.LeaveApplicationAttachment;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.*;
+import sunhan.sunhanbackend.repository.mysql.LeaveApplicationAttachmentRepository;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
+import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -53,7 +65,9 @@ public class LeaveApplicationService {
     private static final DateTimeFormatter ISO_LOCAL = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private final PdfGenerationService pdfGenerationService; // 비동기 서비스 주입
     private final PermissionService permissionService;
-
+    private final LeaveApplicationAttachmentRepository attachmentRepository;
+    @Value("${file.upload-dir}") // application.properties에 경로 설정 필요
+    private String uploadDir;
     private String toIsoString(Object maybeDate) {
         if (maybeDate == null) return LocalDateTime.now().format(ISO_LOCAL);
 
@@ -72,6 +86,98 @@ public class LeaveApplicationService {
             }
         }
         return maybeDate.toString();
+    }
+
+    /**
+     * 첨부파일 추가
+     */
+    @Transactional
+    public AttachmentResponseDto addAttachment(Long leaveApplicationId, String userId, MultipartFile file) throws IOException {
+        LeaveApplication application = leaveApplicationRepository.findById(leaveApplicationId)
+                .orElseThrow(() -> new EntityNotFoundException("휴가원을 찾을 수 없습니다."));
+
+        // DRAFT 상태이고, 본인이 신청한 휴가원일 때만 파일 첨부 가능
+        if (application.getStatus() != sunhan.sunhanbackend.enums.LeaveApplicationStatus.DRAFT || !application.getApplicantId().equals(userId)) {
+            throw new AccessDeniedException("파일을 첨부할 권한이 없습니다.");
+        }
+
+        // 1. 파일 저장 로직
+        String originalFileName = file.getOriginalFilename();
+        // 실제 저장될 파일 이름 (UUID를 사용하여 파일명 중복 방지)
+        String storedFileName = UUID.randomUUID().toString() + "_" + originalFileName;
+
+        // 저장 경로 설정
+        Path storagePath = Paths.get(uploadDir).toAbsolutePath().normalize();
+        // 디렉토리가 존재하지 않으면 생성
+        Files.createDirectories(storagePath);
+        Path targetLocation = storagePath.resolve(storedFileName);
+
+        // 파일 저장
+        Files.copy(file.getInputStream(), targetLocation);
+
+        // 2. 데이터베이스에 파일 메타데이터 저장
+        LeaveApplicationAttachment attachment = LeaveApplicationAttachment.builder()
+                .leaveApplication(application)
+                .originalFileName(originalFileName)
+                .storedFilePath(targetLocation.toString()) // 서버에 저장된 전체 경로
+                .fileType(file.getContentType())
+                .fileSize(file.getSize())
+                .build();
+
+        attachmentRepository.save(attachment);
+        application.addAttachment(attachment); // 연관관계 편의 메서드 호출
+
+        return AttachmentResponseDto.fromEntity(attachment);
+    }
+
+    /**
+     * 첨부파일 삭제
+     */
+    @Transactional
+    public void deleteAttachment(Long leaveApplicationId, Long attachmentId, String userId) throws IOException {
+        LeaveApplication application = leaveApplicationRepository.findById(leaveApplicationId)
+                .orElseThrow(() -> new EntityNotFoundException("휴가원을 찾을 수 없습니다."));
+
+        // DRAFT 상태이고, 본인이 신청한 휴가원일 때만 파일 삭제 가능
+        if (application.getStatus() != sunhan.sunhanbackend.enums.LeaveApplicationStatus.DRAFT || !application.getApplicantId().equals(userId)) {
+            throw new AccessDeniedException("파일을 삭제할 권한이 없습니다.");
+        }
+
+        LeaveApplicationAttachment attachment = attachmentRepository.findById(attachmentId)
+                .orElseThrow(() -> new EntityNotFoundException("첨부파일을 찾을 수 없습니다."));
+
+        // 1. 서버에 저장된 실제 파일 삭제
+        File fileToDelete = new File(attachment.getStoredFilePath());
+        if (fileToDelete.exists()) {
+            fileToDelete.delete();
+        }
+
+        // 2. 데이터베이스에서 파일 정보 삭제
+        attachmentRepository.delete(attachment);
+    }
+
+    /**
+     * 첨부파일 정보 조회 (다운로드 시 파일명 확인용)
+     */
+    public LeaveApplicationAttachment getAttachmentInfo(Long attachmentId) {
+        return attachmentRepository.findById(attachmentId)
+                .orElseThrow(() -> new EntityNotFoundException("첨부파일을 찾을 수 없습니다."));
+    }
+
+    /**
+     * 첨부파일 다운로드를 위한 리소스 로드
+     */
+    public Resource loadFileAsResource(Long attachmentId) throws MalformedURLException {
+        LeaveApplicationAttachment attachment = getAttachmentInfo(attachmentId);
+
+        Path filePath = Paths.get(attachment.getStoredFilePath()).normalize();
+        Resource resource = new UrlResource(filePath.toUri());
+
+        if (resource.exists() && resource.isReadable()) {
+            return resource;
+        } else {
+            throw new EntityNotFoundException("파일을 찾을 수 없거나 읽을 수 없습니다: " + attachment.getOriginalFileName());
+        }
     }
     /**
      * 휴가원 생성
@@ -342,7 +448,6 @@ public class LeaveApplicationService {
             throw new IllegalStateException("드래프트 또는 반려 상태의 휴가원만 제출할 수 있습니다.");
         }
 
-        // ✅ Optional<UserEntity>를 안전하게 처리하도록 수정
         UserEntity applicant = userRepository.findByUserId(userId)
                 .orElseThrow(() -> new EntityNotFoundException("신청자 정보를 찾을 수 없습니다: " + userId));
 
@@ -428,6 +533,11 @@ public class LeaveApplicationService {
             // 폼 데이터 기반으로 휴가 정보 업데이트
             updateApplicationFromDto(application, formDataDto);
 
+            // 폼 데이터에서 applicationDate 값을 가져와 엔티티에 설정
+            if (formDataDto.getApplicationDate() != null) {
+                application.setApplicationDate(formDataDto.getApplicationDate());
+            }
+
             // 첫 승인 단계 및 승인자 설정 로직
             String substituteId = application.getSubstituteId();
             String initialStep = determineInitialApprovalStep(applicant.getJobLevel(), substituteId != null);
@@ -453,8 +563,6 @@ public class LeaveApplicationService {
             log.error("날짜 파싱 오류: 폼 데이터의 날짜 형식이 잘못되었습니다.", e);
             throw new IllegalArgumentException("날짜 형식이 올바르지 않거나 비어있습니다. 날짜를 확인해주세요.", e);
         }
-
-        application.setApplicationDate(LocalDate.now());
         return leaveApplicationRepository.save(application);
     }
 

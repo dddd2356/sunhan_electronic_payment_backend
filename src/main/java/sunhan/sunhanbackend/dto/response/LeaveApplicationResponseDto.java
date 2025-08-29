@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Getter
 @Setter
@@ -69,6 +70,7 @@ public class LeaveApplicationResponseDto {
     private Map<String, List<Map<String, Object>>> signatures;
     private String pdfUrl;
     private boolean printable;
+    private List<AttachmentResponseDto> attachments;
 
     public static LeaveApplicationResponseDto fromEntity(
             LeaveApplication app,
@@ -112,7 +114,11 @@ public class LeaveApplicationResponseDto {
         dto.setFinalApproverId(app.getFinalApproverId());
         dto.setFinalApprovalDate(app.getFinalApprovalDate());
         dto.setFinalApprovalStep(app.getFinalApprovalStep());
-
+        if (app.getAttachments() != null) {
+            dto.setAttachments(app.getAttachments().stream()
+                    .map(AttachmentResponseDto::fromEntity)
+                    .collect(Collectors.toList()));
+        }
         // formDataJson 파싱해서 signatures 상태 반영
         Map<String, List<Map<String, Object>>> sigMap = Map.of();
         try {

@@ -11,6 +11,8 @@ import sunhan.sunhanbackend.enums.LeaveType;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Table(name = "leave_application")
 @Data
@@ -152,4 +154,11 @@ public class LeaveApplication {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @OneToMany(mappedBy = "leaveApplication", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private List<LeaveApplicationAttachment> attachments = new ArrayList<>();
+
+    // 양방향 연관관계 편의 메서드
+    public void addAttachment(LeaveApplicationAttachment attachment) {
+        this.attachments.add(attachment);
+    }
 }

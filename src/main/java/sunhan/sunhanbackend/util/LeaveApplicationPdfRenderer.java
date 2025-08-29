@@ -85,6 +85,36 @@ public class LeaveApplicationPdfRenderer {
         log.info("=== getJobLevelTitle 디버깅 끝 ===");
         return result;
     }
+
+    private static String formatApplicationDate(JsonNode data) {
+        String applicationDate = data.path("applicationDate").asText("");
+        log.info("=== formatApplicationDate 디버깅 ===");
+        log.info("원본 applicationDate: '{}'", applicationDate);
+
+        if (applicationDate.isEmpty()) {
+            log.warn("applicationDate가 비어있음");
+            return "";
+        }
+
+        try {
+            // 다양한 날짜 형식 처리
+            if (applicationDate.length() >= 10) {
+                String dateOnly = applicationDate.substring(0, 10);
+                log.info("추출된 dateOnly: '{}'", dateOnly);
+
+                LocalDate date = LocalDate.parse(dateOnly);
+                String formatted = date.format(DateTimeFormatter.ofPattern("yyyy년 MM월 dd일"));
+                log.info("포맷된 결과: '{}'", formatted);
+                return formatted;
+            }
+            log.warn("applicationDate 길이가 10자 미만: {}", applicationDate.length());
+            return "";
+        } catch (Exception e) {
+            log.error("applicationDate 파싱 실패: {}", applicationDate, e);
+            return "";
+        }
+    }
+
     public static byte[] render(String jsonData) throws IOException {
         JsonNode data = objectMapper.readTree(jsonData);
         String htmlContent = generateLeaveApplicationHtml(data);
@@ -411,7 +441,8 @@ public class LeaveApplicationPdfRenderer {
         html.append("</tbody></table>");
 
         html.append("<div class='bottom-text'>위와 같이 ( 휴가 ) 원을 제출하오니 허가하여 주시기 바랍니다.</div>");
-        String applicationDate = data.has("applicationDate") ? LocalDate.parse(data.path("applicationDate").asText()).format(DateTimeFormatter.ofPattern("yyyy년 MM월 dd일")) : "";
+        //String applicationDate = data.has("applicationDate") ? LocalDate.parse(data.path("applicationDate").asText()).format(DateTimeFormatter.ofPattern("yyyy년 MM월 dd일")) : "";
+        String applicationDate = formatApplicationDate(data);
         html.append("<div class='signature'><div class='date-section'>").append(applicationDate).append("</div></div>");
         html.append("<div class='applicant-signature'><span>위 신청인 : ").append(applicantName).append("</span>")
                 .append(generateSignatureAreaMain("applicant", data.path("isApplicantSigned").asBoolean(false), signatures))
@@ -457,15 +488,27 @@ public class LeaveApplicationPdfRenderer {
                                                 String currentStepForCell,
                                                 boolean allowShowHigherSignatures) {
         StringBuilder sb = new StringBuilder("<td class='signature-cell'>");
+        // HR_FINAL_APPROVAL 단계 특별 처리
+        if ("HR_FINAL_APPROVAL".equals(currentStepForCell)) {
+            boolean isActualFinalApprovalStep = (isFinalApproved && finalApprovalStep != null && finalApprovalStep.equals(currentStepForCell));
+            boolean isHigherThanFinal = (isFinalApproved && finalApprovalStep != null && isHigherStep(finalApprovalStep, currentStepForCell));
 
-        log.info("=== generateSignatureCell 디버깅 ===");
-        log.info("currentStepForCell: {}", currentStepForCell);
-        log.info("isApprovedFlag: {}", isApprovedFlag);
-        log.info("isFinalApproved: {}", isFinalApproved);
-        log.info("finalApprovalStep: {}", finalApprovalStep);
-        log.info("signatureNode: {}", signatureNode);
-        log.info("allowShowHigherSignatures: {}", allowShowHigherSignatures);
-
+            if (isActualFinalApprovalStep) {
+                // 이 단계에서 전결 처리한 경우
+                log.info("HR_FINAL_APPROVAL에서 전결 처리");
+                sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
+            } else if (isHigherThanFinal) {
+                // 상위 단계에서 전결 처리된 경우
+                log.info("HR_FINAL_APPROVAL - 상위에서 전결 처리됨");
+                sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
+            } else {
+                // 일반적인 경우 - 확인 단계이므로 빈 셀
+                log.info("HR_FINAL_APPROVAL - 일반 확인 단계");
+                sb.append("/");
+            }
+            sb.append("</td>");
+            return sb.toString();
+        }
         boolean isSignedByThisPerson = false;
         String rawImage = null;
         String rawText = null;
@@ -477,33 +520,23 @@ public class LeaveApplicationPdfRenderer {
 
         String imageUrl = normalizeImageUrl(rawImage);
 
-        log.info("isSignedByThisPerson: {}", isSignedByThisPerson);
-        log.info("rawImage present? {}", rawImage != null ? "있음(" + rawImage.length() + "자)" : "없음");
-        log.info("normalized imageUrl startsWith data:? {}", imageUrl != null && imageUrl.startsWith("data:"));
-
         // 실제 전결 처리한 단계인지 확인
         boolean isActualFinalApprovalStep = (isFinalApproved && finalApprovalStep != null && finalApprovalStep.equals(currentStepForCell));
 
         // 전결 단계보다 '상위' 인지 확인 (전결로 자동 승인되어야 하는 단계)
         boolean isHigherThanFinal = (isFinalApproved && finalApprovalStep != null && isHigherStep(finalApprovalStep, currentStepForCell));
 
-        log.info("isActualFinalApprovalStep: {}", isActualFinalApprovalStep);
-        log.info("isHigherThanFinal: {}", isHigherThanFinal);
-
         // 우선순위: 1) 만약 현재 셀이 전결보다 상위 단계이면 '전결처리' (단, 옵션으로 저장된 서명을 대신 보여줄 수 있게 함)
         if (isHigherThanFinal) {
             if (allowShowHigherSignatures && isSignedByThisPerson) {
                 // 옵션 허용 시: 상위 단계의 저장된 서명(이미지 또는 텍스트)을 대신 표시
                 if (imageUrl != null && !imageUrl.isBlank()) {
-                    log.info("케이스: 전결 상태지만 옵션 허용 -> 상위 단계 저장된 이미지 표시");
                     sb.append("<img src='").append(imageUrl).append("' alt='서명' class='signature-image'/>");
                 } else {
-                    log.info("케이스: 전결 상태지만 옵션 허용 -> 상위 단계 저장된 텍스트(승인) 표시");
                     sb.append(rawText != null && !rawText.isBlank() ? rawText : "승인");
                 }
             } else {
                 // 기본 동작: 전결처리 마크 표시 (저장된 서명 무시)
-                log.info("케이스: 전결처리 표시 (상위단계) - 저장된 서명 무시");
                 sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
             }
         }
@@ -511,15 +544,12 @@ public class LeaveApplicationPdfRenderer {
         else if (isActualFinalApprovalStep) {
             if (isSignedByThisPerson) {
                 if (imageUrl != null && !imageUrl.isBlank()) {
-                    log.info("케이스: 실제 전결자 - 서명 이미지 표시");
                     sb.append("<img src='").append(imageUrl).append("' alt='서명' class='signature-image'/>");
                 } else {
-                    log.info("케이스: 실제 전결자 - 서명 텍스트 표시");
                     sb.append(rawText != null && !rawText.isBlank() ? rawText : "전결처리!");
                 }
             } else {
                 // 드문 경우: finalApproval가 설정됐는데 실제 서명이 없는 경우에도 전결처리 마크로 표시
-                log.info("케이스: 실제 전결자(서명없음) - 전결처리 표시");
                 sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
             }
         }
@@ -527,21 +557,16 @@ public class LeaveApplicationPdfRenderer {
         else {
             if (isSignedByThisPerson) {
                 if (imageUrl != null && !imageUrl.isBlank()) {
-                    log.info("케이스: 일반 단계 - 서명 이미지 표시");
                     sb.append("<img src='").append(imageUrl).append("' alt='서명' class='signature-image'/>");
                 } else {
-                    log.info("케이스: 일반 단계 - 서명 텍스트 표시");
                     sb.append(rawText != null && !rawText.isBlank() ? rawText : "승인");
                 }
             } else {
-                log.info("케이스: 일반 단계 - 빈 셀 표시 (/) - isApprovedFlag: {}", isApprovedFlag);
                 sb.append("/");
             }
         }
 
         sb.append("</td>");
-        log.info("최종 생성된 HTML (signature): {}", sb.toString());
-        log.info("=== generateSignatureCell 디버깅 끝 ===");
 
         return sb.toString();
     }
@@ -776,6 +801,7 @@ public class LeaveApplicationPdfRenderer {
         List<String> stepOrder = List.of(
                 "HR_STAFF_APPROVAL",
                 "CENTER_DIRECTOR_APPROVAL",
+                "HR_FINAL_APPROVAL",
                 "ADMIN_DIRECTOR_APPROVAL",
                 "CEO_DIRECTOR_APPROVAL"
         );
