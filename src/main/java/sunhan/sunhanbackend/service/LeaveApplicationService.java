@@ -369,6 +369,43 @@ public class LeaveApplicationService {
             if (formDataDto.getLeaveTypes() == null || formDataDto.getLeaveTypes().isEmpty()) {
                 throw new IllegalArgumentException("휴가 종류를 선택해주세요.");
             }
+            // 연차휴가인지 확인
+            boolean isAnnualLeave = formDataDto.getLeaveTypes().contains("연차휴가");
+            // 연차휴가인 경우에만 totalDays 검증
+            if (isAnnualLeave) {
+                if (formDataDto.getTotalDays() == null || formDataDto.getTotalDays() <= 0) {
+                    throw new IllegalArgumentException("연차휴가 신청 시 휴가 기간을 입력해주세요.");
+                }
+            } else {
+                // 연차휴가가 아닌 경우, totalDays가 없거나 0이어도 허용
+                // 다만, 날짜는 여전히 필요할 수 있으므로 날짜 검증은 별도로 수행
+                boolean hasValidDates = false;
+
+                // 개별 기간 확인
+                if (formDataDto.getFlexiblePeriods() != null) {
+                    for (Map<String, String> period : formDataDto.getFlexiblePeriods()) {
+                        if (period.get("startDate") != null && !period.get("startDate").isEmpty() &&
+                                period.get("endDate") != null && !period.get("endDate").isEmpty()) {
+                            hasValidDates = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 연속 기간 확인
+                if (!hasValidDates && formDataDto.getConsecutivePeriod() != null) {
+                    if (formDataDto.getConsecutivePeriod().get("startDate") != null &&
+                            !formDataDto.getConsecutivePeriod().get("startDate").isEmpty() &&
+                            formDataDto.getConsecutivePeriod().get("endDate") != null &&
+                            !formDataDto.getConsecutivePeriod().get("endDate").isEmpty()) {
+                        hasValidDates = true;
+                    }
+                }
+
+                if (!hasValidDates) {
+                    throw new IllegalArgumentException("휴가 기간을 입력해주세요.");
+                }
+            }
 
             if (formDataDto.getTotalDays() == null || formDataDto.getTotalDays() <= 0) {
                 throw new IllegalArgumentException("휴가 기간을 입력해주세요.");
@@ -582,7 +619,7 @@ public class LeaveApplicationService {
     }
 
     /**
-     * 휴가 정보를 DTO로부터 업데이트하는 헬퍼 메서드 (전체 코드)
+     * 휴가 정보를 DTO로부터 업데이트하는 헬퍼 메서드 (수정됨 - 연차휴가만 일수 차감)
      */
     private void updateApplicationFromDto(LeaveApplication application, LeaveApplicationUpdateFormRequestDto dto) {
         // 대직자 정보 설정
@@ -590,12 +627,11 @@ public class LeaveApplicationService {
         application.setSubstituteId(substituteId);
 
         // 휴가 종류 설정
+        LeaveType matchedType = null;
         if (dto.getLeaveTypes() != null && !dto.getLeaveTypes().isEmpty()) {
             String koreanLeaveType = dto.getLeaveTypes().get(0);
 
-            // LeaveType Enum에 한글 이름으로 Enum을 찾는 정적 메서드가 있다고 가정
-            // 예: public static LeaveType fromDisplayName(String displayName) { ... }
-            LeaveType matchedType = null;
+            // LeaveType Enum에서 한글 이름으로 찾기
             for (LeaveType type : LeaveType.values()) {
                 if (type.getDisplayName().equals(koreanLeaveType)) {
                     matchedType = type;
@@ -611,8 +647,19 @@ public class LeaveApplicationService {
             }
         }
 
-        // --- 여기서부터 생략되었던 '날짜 및 기간 계산 로직' ---
+        // ★★★ 연차휴가가 아닌 경우 totalDays를 0으로 설정하고 일수 계산 로직 건너뛰기 ★★★
+        boolean isAnnualLeave = dto.getLeaveTypes() != null &&
+                dto.getLeaveTypes().contains("연차휴가") &&
+                matchedType == LeaveType.ANNUAL_LEAVE;
 
+        if (!isAnnualLeave) {
+            application.setTotalDays(0.0);
+            // 시작일/종료일은 여전히 설정 (다른 휴가 유형도 날짜 정보는 필요할 수 있음)
+            setStartEndDatesFromDto(application, dto);
+            return; // 일수 계산 로직 건너뛰고 메서드 종료
+        }
+
+        // 연차휴가인 경우에만 아래 일수 계산 로직 실행
         // totalDays 설정: DTO의 값이 우선하며, 없는 경우에만 재계산
         Double totalDays = dto.getTotalDays();
         if (totalDays == null || totalDays <= 0) {
@@ -651,14 +698,21 @@ public class LeaveApplicationService {
             }
 
             if (calculatedTotalDays == 0.0) {
-                throw new IllegalArgumentException("폼 데이터에 유효한 totalDays 값이 없거나 휴가 기간 정보가 없습니다.");
+                throw new IllegalArgumentException("연차휴가 신청 시 유효한 휴가 기간이 입력되어야 합니다.");
             }
             application.setTotalDays(calculatedTotalDays);
         } else {
             application.setTotalDays(totalDays);
         }
 
-        // 시작일(startDate)과 종료일(endDate) 설정 로직
+        // 시작일(startDate)과 종료일(endDate) 설정
+        setStartEndDatesFromDto(application, dto);
+    }
+
+    /**
+     * DTO에서 시작일과 종료일을 설정하는 별도 메서드
+     */
+    private void setStartEndDatesFromDto(LeaveApplication application, LeaveApplicationUpdateFormRequestDto dto) {
         LocalDate calculatedStartDate = null;
         LocalDate calculatedEndDate = null;
 
@@ -702,12 +756,10 @@ public class LeaveApplicationService {
             }
         }
 
-        if (calculatedStartDate == null || calculatedEndDate == null) {
-            throw new IllegalArgumentException("유효한 휴가 시작일과 종료일이 폼 데이터에 없습니다.");
+        if (calculatedStartDate != null && calculatedEndDate != null) {
+            application.setStartDate(calculatedStartDate);
+            application.setEndDate(calculatedEndDate);
         }
-
-        application.setStartDate(calculatedStartDate);
-        application.setEndDate(calculatedEndDate);
     }
 
     /**
