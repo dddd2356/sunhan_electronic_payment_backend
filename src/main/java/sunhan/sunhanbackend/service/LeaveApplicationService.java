@@ -1411,13 +1411,14 @@ public class LeaveApplicationService {
                 return substituteId;
 
             case "DEPARTMENT_HEAD_APPROVAL": {
-                // 같은 부서의 부서장(jobLevel=1), 신청자 제외
-                Optional<UserEntity> deptHead = userRepository.findFirstByDeptCodeAndJobLevel(applicant.getDeptCode(), "1")
+                // 수정: useFlag = 1 조건 추가
+                Optional<UserEntity> deptHead = userRepository.findFirstByDeptCodeAndJobLevelAndUseFlag(applicant.getDeptCode(), "1", "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (deptHead.isPresent()) return deptHead.get().getUserId();
 
-                // 부서장이 없거나 부서장이 신청자 본인인 경우 HR로 폴백
-                Optional<UserEntity> hr = userRepository.findFirstByJobLevelAndDeptCodeAndRole("0", "AD", Role.ADMIN)
+                // 폴백 로직도 useFlag 조건 추가
+                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(
+                                Arrays.asList("0", "1"), "AD", Role.ADMIN, "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (hr.isPresent()) return hr.get().getUserId();
 
@@ -1441,14 +1442,14 @@ public class LeaveApplicationService {
 
                 // 4. 신청자가 인사팀이 아닐 경우, 기존 로직 유지 (단일 인사 담당자 지정)
                 List<String> hrJobLevels = Arrays.asList("0", "1");
-                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRole(hrJobLevels, "AD", Role.ADMIN)
+                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(hrJobLevels, "AD", Role.ADMIN, "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (hr.isPresent()) {
                     return hr.get().getUserId();
                 }
 
                 // 5. 인사 담당자가 없을 경우, 센터장으로 폴백
-                Optional<UserEntity> center = userRepository.findFirstByJobLevel("2")
+                Optional<UserEntity> center = userRepository.findFirstByJobLevelAndUseFlag("2", "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (center.isPresent()) {
                     return center.get().getUserId();
@@ -1458,18 +1459,18 @@ public class LeaveApplicationService {
             }
 
             case "CENTER_DIRECTOR_APPROVAL": {
-                // 센터장 후보( jobLevel=2 ), 신청자 제외
-                Optional<UserEntity> center = userRepository.findFirstByJobLevel("2")
+                // 수정: useFlag = 1 조건 추가
+                Optional<UserEntity> center = userRepository.findFirstByJobLevelAndUseFlag("2", "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (center.isPresent()) return center.get().getUserId();
 
-                // 센터장이 없거나 신청자가 같은 레벨일 경우 행정원장으로 폴백
-                Optional<UserEntity> admin = userRepository.findFirstByJobLevel("4")
+                // 폴백도 useFlag 조건 추가
+                Optional<UserEntity> admin = userRepository.findFirstByJobLevelAndUseFlag("4", "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (admin.isPresent()) return admin.get().getUserId();
 
-                // 최후 폴백: 대표원장
-                return userRepository.findFirstByJobLevel("5")
+                // 최후 폴백도 useFlag 조건 추가
+                return userRepository.findFirstByJobLevelAndUseFlag("5", "1")
                         .filter(u -> !u.getUserId().equals(applicantId))
                         .map(UserEntity::getUserId)
                         .orElseThrow(() -> new EntityNotFoundException("승인자를 찾을 수 없습니다."));
@@ -1477,14 +1478,15 @@ public class LeaveApplicationService {
 
             case "HR_FINAL_APPROVAL": {
                 List<String> hrJobLevels = Arrays.asList("0", "1");
-                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRole(hrJobLevels, "AD", Role.ADMIN)
+                // 수정: useFlag = 1 조건 추가
+                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(hrJobLevels, "AD", Role.ADMIN, "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (hr.isPresent()) {
                     return hr.get().getUserId();
                 }
 
-                // 인사 담당자가 없을 경우, 행정원장으로 폴백
-                Optional<UserEntity> admin = userRepository.findFirstByJobLevel("4")
+                // 인사 담당자가 없을 경우, 행정원장으로 폴백 (useFlag = 1 조건 추가)
+                Optional<UserEntity> admin = userRepository.findFirstByJobLevelAndUseFlag("4", "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (admin.isPresent()) return admin.get().getUserId();
 
@@ -1492,19 +1494,21 @@ public class LeaveApplicationService {
             }
 
             case "ADMIN_DIRECTOR_APPROVAL": {
-                Optional<UserEntity> admin = userRepository.findFirstByJobLevel("4")
+                // 수정: useFlag = 1 조건 추가
+                Optional<UserEntity> admin = userRepository.findFirstByJobLevelAndUseFlag("4", "1")
                         .filter(u -> !u.getUserId().equals(applicantId));
                 if (admin.isPresent()) return admin.get().getUserId();
 
-                // 폴백: 대표원장
-                return userRepository.findFirstByJobLevel("5")
+                // 폴백도 useFlag 조건 추가
+                return userRepository.findFirstByJobLevelAndUseFlag("5", "1")
                         .filter(u -> !u.getUserId().equals(applicantId))
                         .map(UserEntity::getUserId)
                         .orElseThrow(() -> new EntityNotFoundException("행정원장 또는 대표원장을 찾을 수 없습니다."));
             }
 
             case "CEO_DIRECTOR_APPROVAL": {
-                return userRepository.findFirstByJobLevel("5")
+                // 수정: useFlag = 1 조건 추가
+                return userRepository.findFirstByJobLevelAndUseFlag("5", "1")
                         .filter(u -> !u.getUserId().equals(applicantId))
                         .map(UserEntity::getUserId)
                         .orElseThrow(() -> new EntityNotFoundException("대표원장을 찾을 수 없습니다."));

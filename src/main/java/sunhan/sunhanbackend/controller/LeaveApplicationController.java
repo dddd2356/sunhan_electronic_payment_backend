@@ -664,8 +664,8 @@ public class LeaveApplicationController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "대직자 후보 조회 권한이 없습니다."));
             }
 
-            // 허용된 사용자면 같은 부서의 jobLevel == "0" 인 사람들(본인 제외)만 반환
-            List<UserEntity> allInDept = userService.getUsersByDeptCode(currentUser.getUserId(), currentUser.getDeptCode());
+            // 허용된 사용자면 같은 부서의 jobLevel == "0" 이면서 useFlag == "1"인 사람들(본인 제외)만 반환
+            List<UserEntity> allInDept = userService.getActiveUsersByDeptCode(currentUser.getUserId(), currentUser.getDeptCode());
 
             List<Map<String, Object>> dto = allInDept.stream()
                     .filter(u -> u.getUserId() != null && !u.getUserId().equals(userId))

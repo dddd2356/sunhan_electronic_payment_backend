@@ -26,7 +26,8 @@ repositories {
 dependencies {
 	// ✅ [추가] Jackson이 Hibernate의 지연 로딩을 처리하도록 돕는 모듈
 	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-hibernate6'
-
+	// ✅ Kafka
+	implementation 'org.springframework.kafka:spring-kafka'
 	implementation 'javax.cache:cache-api:1.1.1'
 	implementation 'org.hibernate:hibernate-jcache:6.6.15.Final'
 	// JCache 구현체 (Ehcache)

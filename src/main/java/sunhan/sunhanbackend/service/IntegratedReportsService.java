@@ -53,9 +53,63 @@ public class IntegratedReportsService {
                 break;
 
             case "completed":
-                if (isAdmin) {
+                UserEntity currentUserCompleted = userRepository.findByUserId(userId).orElse(null);
+                String jobLevel = currentUserCompleted != null ? currentUserCompleted.getJobLevel() : null;
+                Role userRole = currentUserCompleted != null ? currentUserCompleted.getRole() : null;
+
+                boolean hasHrContractPermissionCompleted = permissionService.hasPermission(userId, PermissionType.HR_CONTRACT);
+                boolean hasHrLeavePermissionCompleted = permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION);
+
+                // 1) jobLevel 2 or 6 + ADMIN: 모든 문서 조회 (둘 다 전체)
+                if (("2".equals(jobLevel) || "6".equals(jobLevel)) && userRole == Role.ADMIN) {
                     results = reportsRepository.findCompletedDocumentsUnion(userId, true, limit, offset);
                     totalCount = reportsRepository.countCompletedDocuments(userId, true);
+
+                    // 1.5) ADMIN 이고 둘 다 HR 권한 보유 => 모든 문서 조회
+                } else if (userRole == Role.ADMIN && hasHrContractPermissionCompleted && hasHrLeavePermissionCompleted) {
+                    results = reportsRepository.findCompletedDocumentsUnion(userId, true, limit, offset);
+                    totalCount = reportsRepository.countCompletedDocuments(userId, true);
+
+                    // 2) ADMIN + HR_CONTRACT (한쪽 권한만) : 계약서는 전체, 휴가원은 본인 관련만
+                } else if (userRole == Role.ADMIN && hasHrContractPermissionCompleted) {
+                    int fetchSize = offset + limit;
+                    List<Object[]> contractResults = reportsRepository.findCompletedContracts(userId, true, fetchSize, 0);
+                    List<Object[]> leaveResults = reportsRepository.findCompletedLeaveApplications(userId, false, fetchSize, 0);
+
+                    List<Object[]> combined = new ArrayList<>();
+                    combined.addAll(contractResults);
+                    combined.addAll(leaveResults);
+
+                    // updated_at 기준 내림차순 정렬 (Timestamp 컬럼은 인덱스 3)
+                    combined.sort((a, b) -> ((Timestamp) b[3]).compareTo((Timestamp) a[3]));
+
+                    totalCount = reportsRepository.countCompletedContracts(userId, true)
+                            + reportsRepository.countCompletedLeaveApplications(userId, false);
+
+                    int fromIndex = Math.min(offset, combined.size());
+                    int toIndex = Math.min(offset + limit, combined.size());
+                    results = combined.subList(fromIndex, toIndex);
+
+                    // 3) ADMIN + HR_LEAVE_APPLICATION : 휴가원은 전체, 계약서는 본인 관련만
+                } else if (userRole == Role.ADMIN && hasHrLeavePermissionCompleted) {
+                    int fetchSize = offset + limit;
+                    List<Object[]> leaveResultsAll = reportsRepository.findCompletedLeaveApplications(userId, true, fetchSize, 0);
+                    List<Object[]> contractResultsUser = reportsRepository.findCompletedContracts(userId, false, fetchSize, 0);
+
+                    List<Object[]> combined = new ArrayList<>();
+                    combined.addAll(leaveResultsAll);
+                    combined.addAll(contractResultsUser);
+
+                    combined.sort((a, b) -> ((Timestamp) b[3]).compareTo((Timestamp) a[3]));
+
+                    totalCount = reportsRepository.countCompletedLeaveApplications(userId, true)
+                            + reportsRepository.countCompletedContracts(userId, false);
+
+                    int fromIndex = Math.min(offset, combined.size());
+                    int toIndex = Math.min(offset + limit, combined.size());
+                    results = combined.subList(fromIndex, toIndex);
+
+                    // 4) 그 외: 본인 관련 문서만 조회
                 } else {
                     results = reportsRepository.findCompletedDocumentsUnion(userId, false, limit, offset);
                     totalCount = reportsRepository.countCompletedDocuments(userId, false);
@@ -162,8 +216,36 @@ public class IntegratedReportsService {
         }
         counts.put("pendingCount", pendingCount);
 
-        // completed는 관리자 여부에 따라 다르게 조회
-        counts.put("completedCount", reportsRepository.countCompletedDocuments(userId, isAdmin));
+        // completed는 권한별로 조회
+        String jobLevel = currentUser != null ? currentUser.getJobLevel() : null;
+        Role userRole = currentUser != null ? currentUser.getRole() : null;
+
+        long completedCount;
+
+// 1) jobLevel 2,6 + ADMIN: 모든 완료 문서
+        if (("2".equals(jobLevel) || "6".equals(jobLevel)) && userRole == Role.ADMIN) {
+            completedCount = reportsRepository.countCompletedDocuments(userId, true);
+
+// 1.5) ADMIN이고 둘 다 권한 있으면: 모든 문서 카운트
+        } else if (userRole == Role.ADMIN && hasHrContractPermission && hasHrLeavePermission) {
+            completedCount = reportsRepository.countCompletedDocuments(userId, true);
+
+// 2) ADMIN + HR_CONTRACT : 계약서는 전체, 휴가원은 본인 관련만
+        } else if (userRole == Role.ADMIN && hasHrContractPermission) {
+            completedCount = reportsRepository.countCompletedContracts(userId, true)
+                    + reportsRepository.countCompletedLeaveApplications(userId, false);
+
+// 3) ADMIN + HR_LEAVE_APPLICATION : 휴가원은 전체, 계약서는 본인 관련만
+        } else if (userRole == Role.ADMIN && hasHrLeavePermission) {
+            completedCount = reportsRepository.countCompletedLeaveApplications(userId, true)
+                    + reportsRepository.countCompletedContracts(userId, false);
+
+// 4) 그 외: 본인 관련 문서만
+        } else {
+            completedCount = reportsRepository.countCompletedDocuments(userId, false);
+        }
+
+        counts.put("completedCount", completedCount);
 
         return counts;
     }

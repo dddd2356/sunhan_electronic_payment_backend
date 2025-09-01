@@ -29,13 +29,6 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
     @EntityGraph(value = "LeaveApplication.withApplicantAndSubstitute")
     Page<LeaveApplication> findByApplicant_UserId(String applicantId, Pageable pageable);
 
-    Page<LeaveApplication> findByCurrentApproverIdAndStatusInOrCurrentApproverIdIsNullAndStatus(
-            String currentApproverId,
-            Set<LeaveApplicationStatus> statuses,
-            LeaveApplicationStatus hrGroupStatus,
-            Pageable pageable
-    );
-
     // 관리자가 모든 휴가 신청을 조회할 때 N+1 쿼리 방지
     @EntityGraph(value = "LeaveApplication.withApplicantAndSubstitute")
     Page<LeaveApplication> findAll(Pageable pageable);

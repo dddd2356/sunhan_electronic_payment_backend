@@ -24,11 +24,11 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     // 단건 조회는 캐시 적용
     @Cacheable(value = "userCache", key = "#userId", condition = "#userId != null && !#userId.isEmpty()")
     Optional<UserEntity> findByUserId(String userId);
-
+    List<UserEntity> findByUseFlag(String useFlag);
     // 부서별 조회 (캐시)
     @Cacheable(value = "deptCache", key = "#deptCode")
     List<UserEntity> findByDeptCode(String deptCode);
-
+    List<UserEntity> findByDeptCodeAndUseFlag(String deptCode, String useFlag);
     // 직급으로 조회 (결재자 검색용)f
     @Cacheable(value = "jobLevelUsersCache", key = "#jobLevel")
     List<UserEntity> findByJobLevel(String jobLevel);
@@ -47,7 +47,6 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
      */
     @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds")
     List<UserEntity> findByUserIdIn(@Param("userIds") Collection<String> userIds);
-
 
     // 인사팀 직원 조회 (캐시)
     @Cacheable(value = "hrStaffCache", key = "#jobLevel + '_' + #deptCode + '_' + #role")
@@ -76,5 +75,15 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT u FROM UserEntity u WHERE u.userId = :userId")
     Optional<UserEntity> findByUserIdWithLock(@Param("userId") String userId);
+
+    // useFlag = 1 조건이 포함된 새로운 메서드들
+    @Cacheable(value = "deptManagerUseFlagCache", key = "#deptCode + '_' + #jobLevel")
+    Optional<UserEntity> findFirstByDeptCodeAndJobLevelAndUseFlag(String deptCode, String jobLevel, String useFlag);
+
+    @Cacheable(value = "jobLevelUseFlagCache", key = "#jobLevel")
+    Optional<UserEntity> findFirstByJobLevelAndUseFlag(String jobLevel, String useFlag);
+
+    @Cacheable(value = "hrStaffUseFlagCache", key = "#jobLevel + '_' + #deptCode + '_' + #role")
+    Optional<UserEntity> findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(List<String> jobLevels, String deptCode, Role role, String useFlag);
 
 }

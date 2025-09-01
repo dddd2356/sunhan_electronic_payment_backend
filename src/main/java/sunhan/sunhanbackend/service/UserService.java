@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.entity.oracle.OracleEntity;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
@@ -92,10 +93,18 @@ public class UserService {
     /**
      * 캐시 테스트용 메서드
      */
+//    public List<UserEntity> findAllUsers() {
+//        System.out.println("=== DB에서 모든 사용자 조회 ===");
+//        return userRepository.findAll();
+//    }
+
+    //사용자 목록 useflag가 1인경우에 나오게끔 함. 총 휴가 계산하는 페이지, 근로계약서 생성 목록
     public List<UserEntity> findAllUsers() {
-        System.out.println("=== DB에서 모든 사용자 조회 ===");
-        return userRepository.findAll();
+        System.out.println("=== DB에서 활성 사용자 조회 ===");
+        return userRepository.findByUseFlag("1");
     }
+
+
 
     /**
      * 사용자 정보 (전화번호, 주소) 및 비밀번호 업데이트 메서드
@@ -154,10 +163,38 @@ public class UserService {
      */
     @Transactional
     public boolean authenticateUser(String userId, String password) {
-        // 1) MySQL 조회 - 캐시 활용
+        // 1. MySQL에서 사용자 조회
         Optional<UserEntity> userOpt = userRepository.findByUserId(userId);
-        UserEntity user = userOpt.orElse(null);
-        if (user != null) {
+
+        // 2. MySQL에 사용자가 존재하는 경우
+        if (userOpt.isPresent()) {
+            UserEntity user = userOpt.get();
+
+            // 2-1. Oracle DB에서 최신 사용자 정보를 조회하여 useFlag를 동기화합니다.
+            try {
+                // Oracle DB에 접속해 최신 정보를 가져옵니다.
+                OracleEntity oracleUser = oracleService.getOracleUserInfo(userId);
+
+                // MySQL과 Oracle의 useFlag가 다른 경우, MySQL 데이터를 Oracle 값으로 업데이트합니다.
+                if (!Objects.equals(user.getUseFlag(), oracleUser.getUseFlag())) {
+                    log.info("Oracle의 useFlag({})가 MySQL({})과 다릅니다. 사용자 {}의 정보를 동기화합니다.",
+                            oracleUser.getUseFlag(), user.getUseFlag(), userId);
+                    user.setUseFlag(oracleUser.getUseFlag()); // Oracle 값으로 덮어쓰기
+                    userRepository.save(user); // 변경된 상태를 MySQL DB에 최종 저장
+                }
+
+                // Oracle 기준, 사용자가 비활성 상태(퇴사 등)라면 즉시 로그인을 차단합니다.
+                if (!"1".equals(oracleUser.getUseFlag())) {
+                    log.warn("사용자 {}의 로그인이 차단되었습니다. Oracle상 비활성 상태입니다.", userId);
+                    return false; // 로그인 실패 처리
+                }
+
+            } catch (Exception e) {
+                log.error("로그인 중 Oracle DB 동기화 실패: {}. 로그인 프로세스를 중단합니다.", userId, e);
+                return false;
+            }
+
+            // 2-2. 동기화 후, 정상적으로 비밀번호를 검사합니다.
             return passwdEncoder.matches(password, user.getPasswd());
         }
 
@@ -461,6 +498,34 @@ public class UserService {
     }
 
     /**
+     * 부서별 활성 직원 조회 (대직자 후보용)
+     */
+    public List<UserEntity> getActiveUsersByDeptCode(String adminUserId, String deptCode) {
+        Optional<UserEntity> userOpt = userRepository.findByUserId(adminUserId);
+        UserEntity admin = userOpt.orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다: " + adminUserId));
+
+        int adminLevel;
+        try {
+            adminLevel = Integer.parseInt(admin.getJobLevel());
+        } catch (NumberFormatException e) {
+            log.warn("관리자 {}의 JobLevel이 올바르지 않습니다: {}", adminUserId, admin.getJobLevel());
+            throw new RuntimeException("관리자의 JobLevel이 올바르지 않습니다.");
+        }
+
+        if (adminLevel == 1) {
+            if (!admin.getDeptCode().equals(deptCode)) {
+                throw new RuntimeException("자신의 부서만 조회할 수 있습니다.");
+            }
+        }
+
+        // useFlag가 "1"인 활성 사용자만 조회
+        List<UserEntity> users = userRepository.findByDeptCodeAndUseFlag(deptCode, "1");
+        log.info("사용자 {}가 부서 {} 활성 직원 목록 조회 ({}명)", adminUserId, deptCode, users.size());
+
+        return users;
+    }
+
+    /**
      * 부서별 직원 조회 (JobLevel 1인 사람용)
      */
     public List<UserEntity> getUsersByDeptCode(String adminUserId, String deptCode) {
@@ -626,5 +691,40 @@ public class UserService {
             log.error("권한 제거 중 오류 발생: userId={}", targetUserId, e);
             throw new RuntimeException("권한 제거 중 오류가 발생했습니다: " + e.getMessage());
         }
+    }
+    /**
+     * UserFlag 변경 (재직/퇴사 상태 관리)
+     */
+    @Transactional
+    @CacheEvict(value = {"userCache", "deptCache", "deptUsersCache"}, key = "#targetUserId")
+    public void updateUserFlag(String adminUserId, String targetUserId, String newUseFlag) {
+        // 권한 검증
+        if (!canManageUser(adminUserId, targetUserId)) {
+            throw new RuntimeException("해당 사용자의 재직 상태를 변경할 수 없습니다.");
+        }
+
+        // 유효한 UseFlag 값인지 검증
+        if (!"0".equals(newUseFlag) && !"1".equals(newUseFlag)) {
+            throw new RuntimeException("UseFlag는 0(퇴사) 또는 1(재직)만 가능합니다.");
+        }
+
+        UserEntity target = userRepository.findByUserId(targetUserId)
+                .orElseThrow(() -> new RuntimeException("대상 사용자를 찾을 수 없습니다: " + targetUserId));
+
+        String oldUseFlag = target.getUseFlag();
+        target.setUseFlag(newUseFlag);
+
+        // 퇴사 처리 시 추가 로직
+        if ("0".equals(newUseFlag)) {
+            // 퇴사자는 USER 권한으로 변경 (보안상 안전)
+            if (target.getRole() == Role.ADMIN) {
+                target.setRole(Role.USER);
+                log.info("퇴사 처리로 인한 권한 변경: {} -> USER", targetUserId);
+            }
+        }
+
+        userRepository.saveAndFlush(target);
+        log.info("사용자 {}가 {}의 재직상태를 {}에서 {}로 변경",
+                adminUserId, targetUserId, oldUseFlag, newUseFlag);
     }
 }

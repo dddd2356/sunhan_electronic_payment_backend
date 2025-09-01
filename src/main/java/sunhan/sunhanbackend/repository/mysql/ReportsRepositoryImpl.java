@@ -399,4 +399,100 @@ public class ReportsRepositoryImpl implements ReportsRepository {
     private Query createNativeQuery(String sql) {
         return entityManager.createNativeQuery(sql);
     }
+
+    // =========================================
+    // ✅ Completed Contracts 전용 쿼리
+    // =========================================
+    private static final String FIND_COMPLETED_CONTRACTS_QUERY = """
+        SELECT
+            'CONTRACT' as document_type,
+            ec.id,
+            ec.created_at,
+            ec.updated_at,
+            '근로계약서' as title,
+            ec.status,
+            creator.name as creator_name,
+            employee.name as employee_name
+        FROM employment_contract ec
+        JOIN usrmst creator ON ec.creator_id = creator.id
+        JOIN usrmst employee ON ec.employee_id = employee.id
+        WHERE (:isAdmin = true OR ec.creator_id = :userId OR ec.employee_id = :userId)
+          AND ec.status = 'COMPLETED'
+        ORDER BY ec.updated_at DESC
+        LIMIT :limit OFFSET :offset
+    """;
+
+    private static final String COUNT_COMPLETED_CONTRACTS_QUERY = """
+        SELECT COUNT(*)
+        FROM employment_contract ec
+        WHERE (:isAdmin = true OR ec.creator_id = :userId OR ec.employee_id = :userId)
+          AND ec.status = 'COMPLETED'
+    """;
+
+    // =========================================
+    // ✅ Completed Leave Applications 전용 쿼리
+    // =========================================
+    private static final String FIND_COMPLETED_LEAVE_APPLICATIONS_QUERY = """
+        SELECT
+            'LEAVE_APPLICATION' as document_type,
+            la.id,
+            la.created_at,
+            la.updated_at,
+            '휴가원' as title,
+            la.status,
+            applicant.name as creator_name,
+            applicant.name as employee_name
+        FROM leave_application la
+        JOIN usrmst applicant ON la.applicant_id = applicant.id
+        WHERE (:isAdmin = true OR la.applicant_id = :userId)
+          AND la.status = 'APPROVED'
+        ORDER BY la.updated_at DESC
+        LIMIT :limit OFFSET :offset
+    """;
+
+    private static final String COUNT_COMPLETED_LEAVE_APPLICATIONS_QUERY = """
+        SELECT COUNT(*)
+        FROM leave_application la
+        WHERE (:isAdmin = true OR la.applicant_id = :userId)
+          AND la.status = 'APPROVED'
+    """;
+
+    // =========================================
+    // ✅ 구현 메서드 추가
+    // =========================================
+    @Override
+    public List<Object[]> findCompletedContracts(String userId, boolean isAdmin, int limit, int offset) {
+        return createNativeQuery(FIND_COMPLETED_CONTRACTS_QUERY)
+                .setParameter("userId", userId)
+                .setParameter("isAdmin", isAdmin)
+                .setParameter("limit", limit)
+                .setParameter("offset", offset)
+                .getResultList();
+    }
+
+    @Override
+    public long countCompletedContracts(String userId, boolean isAdmin) {
+        return ((Number) createNativeQuery(COUNT_COMPLETED_CONTRACTS_QUERY)
+                .setParameter("userId", userId)
+                .setParameter("isAdmin", isAdmin)
+                .getSingleResult()).longValue();
+    }
+
+    @Override
+    public List<Object[]> findCompletedLeaveApplications(String userId, boolean isAdmin, int limit, int offset) {
+        return createNativeQuery(FIND_COMPLETED_LEAVE_APPLICATIONS_QUERY)
+                .setParameter("userId", userId)
+                .setParameter("isAdmin", isAdmin)
+                .setParameter("limit", limit)
+                .setParameter("offset", offset)
+                .getResultList();
+    }
+
+    @Override
+    public long countCompletedLeaveApplications(String userId, boolean isAdmin) {
+        return ((Number) createNativeQuery(COUNT_COMPLETED_LEAVE_APPLICATIONS_QUERY)
+                .setParameter("userId", userId)
+                .setParameter("isAdmin", isAdmin)
+                .getSingleResult()).longValue();
+    }
 }

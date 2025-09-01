@@ -26,4 +26,12 @@ public interface ReportsRepository {
     List<Object[]> findPendingHrStaffDocuments(int limit, int offset);
     long countPendingHrStaffDocuments();
 
+    // ✅ 계약서만 완료된 문서 조회
+    List<Object[]> findCompletedContracts(String userId, boolean isAdmin, int limit, int offset);
+    long countCompletedContracts(String userId, boolean isAdmin);
+
+    // ✅ 휴가원만 완료된 문서 조회
+    List<Object[]> findCompletedLeaveApplications(String userId, boolean isAdmin, int limit, int offset);
+    long countCompletedLeaveApplications(String userId, boolean isAdmin);
+
 }
