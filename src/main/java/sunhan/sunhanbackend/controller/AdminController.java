@@ -323,32 +323,4 @@ public class AdminController {
                     .body(Map.of("error", e.getMessage()));
         }
     }
-    /**
-     * UserFlag 변경 (재직/퇴사 상태 관리)
-     */
-    @PutMapping("/update-user-flag")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<?> updateUserFlag(
-            @RequestBody UpdateUserFlagRequestDto request,
-            Authentication authentication) {
-        try {
-            String adminUserId = (String) authentication.getPrincipal();
-            userService.updateUserFlag(
-                    adminUserId,
-                    request.getTargetUserId(),
-                    request.getNewUseFlag()
-            );
-
-            Map<String, String> response = new HashMap<>();
-            response.put("message", "재직 상태 변경 완료");
-            response.put("targetUserId", request.getTargetUserId());
-            response.put("newUseFlag", request.getNewUseFlag());
-
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("error", e.getMessage()));
-        }
-    }
-
 }

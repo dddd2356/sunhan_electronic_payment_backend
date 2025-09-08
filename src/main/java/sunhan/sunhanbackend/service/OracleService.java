@@ -37,6 +37,13 @@ public class OracleService {
      * Oracle에서 사용자 정보를 가져와서 MySQL에 저장하는 메서드
      */
     public UserEntity migrateUserFromOracle(String usrId, String password) {
+        // 'administrator' 사용자에 대한 예외 처리
+        if ("administrator".equalsIgnoreCase(usrId)) {
+            log.info("administrator 사용자는 Oracle에서 마이그레이션되지 않습니다. MySQL에서 직접 생성됩니다.");
+            // MySQL에 이미 존재하는 경우를 대비하여 반환. 없으면 null 반환
+            return userRepository.findByUserId(usrId).orElse(null);
+        }
+
         try {
             // 1. Oracle에서 사용자 정보 조회
             OracleEntity oracleUser = getOracleUserInfo(usrId);
@@ -75,7 +82,7 @@ public class OracleService {
                 newUser.setJobLevel("0");
             }
 
-            // ⭐ 추가: JobLevel에 따라 Role 자동 설정
+            //JobLevel에 따라 Role 자동 설정
             try {
                 int jobLevelInt = Integer.parseInt(newUser.getJobLevel());
                 if (jobLevelInt >= 2) {

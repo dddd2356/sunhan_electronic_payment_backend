@@ -163,30 +163,40 @@ public class UserService {
      */
     @Transactional
     public boolean authenticateUser(String userId, String password) {
-        // 1. MySQL에서 사용자 조회
+        // 1. 'administrator' 계정은 Oracle에서 마이그레이션되지 않으므로, 먼저 예외 처리합니다.
+        if ("administrator".equalsIgnoreCase(userId)) {
+            log.info("administrator 로그인: Oracle 동기화 과정을 건너뜁니다.");
+            Optional<UserEntity> adminUser = userRepository.findByUserId(userId);
+            if (adminUser.isPresent()) {
+                return passwdEncoder.matches(password, adminUser.get().getPasswd());
+            } else {
+                // 이 경우는 발생해서는 안되지만, 방어적 코드
+                log.error("Administrator 계정이 MySQL에 존재하지 않습니다.");
+                return false;
+            }
+        }
+
+        // 2. 'administrator'가 아닌 일반 사용자 로그인 로직
+        // 2-1. MySQL에 사용자가 존재하는지 확인
         Optional<UserEntity> userOpt = userRepository.findByUserId(userId);
 
-        // 2. MySQL에 사용자가 존재하는 경우
         if (userOpt.isPresent()) {
             UserEntity user = userOpt.get();
 
-            // 2-1. Oracle DB에서 최신 사용자 정보를 조회하여 useFlag를 동기화합니다.
+            // 2-2. Oracle DB에서 최신 useFlag를 동기화합니다.
             try {
-                // Oracle DB에 접속해 최신 정보를 가져옵니다.
                 OracleEntity oracleUser = oracleService.getOracleUserInfo(userId);
 
-                // MySQL과 Oracle의 useFlag가 다른 경우, MySQL 데이터를 Oracle 값으로 업데이트합니다.
                 if (!Objects.equals(user.getUseFlag(), oracleUser.getUseFlag())) {
                     log.info("Oracle의 useFlag({})가 MySQL({})과 다릅니다. 사용자 {}의 정보를 동기화합니다.",
                             oracleUser.getUseFlag(), user.getUseFlag(), userId);
-                    user.setUseFlag(oracleUser.getUseFlag()); // Oracle 값으로 덮어쓰기
-                    userRepository.save(user); // 변경된 상태를 MySQL DB에 최종 저장
+                    user.setUseFlag(oracleUser.getUseFlag());
+                    userRepository.save(user);
                 }
 
-                // Oracle 기준, 사용자가 비활성 상태(퇴사 등)라면 즉시 로그인을 차단합니다.
                 if (!"1".equals(oracleUser.getUseFlag())) {
                     log.warn("사용자 {}의 로그인이 차단되었습니다. Oracle상 비활성 상태입니다.", userId);
-                    return false; // 로그인 실패 처리
+                    return false;
                 }
 
             } catch (Exception e) {
@@ -194,30 +204,28 @@ public class UserService {
                 return false;
             }
 
-            // 2-2. 동기화 후, 정상적으로 비밀번호를 검사합니다.
+            // 2-3. 동기화 후, 정상적으로 비밀번호를 검사합니다.
             return passwdEncoder.matches(password, user.getPasswd());
-        }
 
-        // 2) Oracle 조회 및 마이그레이션 - 비동기 처리
-        if (password.equals(userId) && oracleService.isUserExistsInOracle(userId)) {
-            CompletableFuture.runAsync(() -> {
-                try {
-                    String encodedPasswordForMigration = passwdEncoder.encode(password);
-                    oracleService.migrateUserFromOracle(userId, encodedPasswordForMigration);
-                    log.info("[첫 로그인] Oracle 유저 '{}' MySQL 마이그레이션 완료", userId);
-                } catch (Exception e) {
-                    log.error("Oracle 유저 마이그레이션 실패: {}", userId, e);
-                }
-            });
-            return true;
+        } else {
+            // 3. MySQL에 존재하지 않으면 첫 로그인으로 간주하고 Oracle에서 마이그레이션합니다.
+            if (password.equals(userId) && oracleService.isUserExistsInOracle(userId)) {
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        String encodedPasswordForMigration = passwdEncoder.encode(password);
+                        oracleService.migrateUserFromOracle(userId, encodedPasswordForMigration);
+                        log.info("[첫 로그인] Oracle 유저 '{}' MySQL 마이그레이션 완료", userId);
+                    } catch (Exception e) {
+                        log.error("Oracle 유저 마이그레이션 실패: {}", userId, e);
+                    }
+                });
+                return true;
+            }
         }
 
         return false;
     }
 
-    /**
-     * 사용자 권한 조회 (캐시 적용)
-     */
     /**
      * 🔧 사용자 권한 조회 (캐시 적용)
      */
@@ -691,40 +699,5 @@ public class UserService {
             log.error("권한 제거 중 오류 발생: userId={}", targetUserId, e);
             throw new RuntimeException("권한 제거 중 오류가 발생했습니다: " + e.getMessage());
         }
-    }
-    /**
-     * UserFlag 변경 (재직/퇴사 상태 관리)
-     */
-    @Transactional
-    @CacheEvict(value = {"userCache", "deptCache", "deptUsersCache"}, key = "#targetUserId")
-    public void updateUserFlag(String adminUserId, String targetUserId, String newUseFlag) {
-        // 권한 검증
-        if (!canManageUser(adminUserId, targetUserId)) {
-            throw new RuntimeException("해당 사용자의 재직 상태를 변경할 수 없습니다.");
-        }
-
-        // 유효한 UseFlag 값인지 검증
-        if (!"0".equals(newUseFlag) && !"1".equals(newUseFlag)) {
-            throw new RuntimeException("UseFlag는 0(퇴사) 또는 1(재직)만 가능합니다.");
-        }
-
-        UserEntity target = userRepository.findByUserId(targetUserId)
-                .orElseThrow(() -> new RuntimeException("대상 사용자를 찾을 수 없습니다: " + targetUserId));
-
-        String oldUseFlag = target.getUseFlag();
-        target.setUseFlag(newUseFlag);
-
-        // 퇴사 처리 시 추가 로직
-        if ("0".equals(newUseFlag)) {
-            // 퇴사자는 USER 권한으로 변경 (보안상 안전)
-            if (target.getRole() == Role.ADMIN) {
-                target.setRole(Role.USER);
-                log.info("퇴사 처리로 인한 권한 변경: {} -> USER", targetUserId);
-            }
-        }
-
-        userRepository.saveAndFlush(target);
-        log.info("사용자 {}가 {}의 재직상태를 {}에서 {}로 변경",
-                adminUserId, targetUserId, oldUseFlag, newUseFlag);
     }
 }
