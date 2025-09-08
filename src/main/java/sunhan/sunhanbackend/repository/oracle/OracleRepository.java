@@ -10,7 +10,4 @@ import java.util.Optional;
 @Repository
 public interface OracleRepository extends JpaRepository<OracleEntity, String> {
     Optional<OracleEntity> findByUsrId(String usrId);
-
-    // useFlag별 조회 (필요시)
-    List<OracleEntity> findByUseFlag(String useFlag);
 }
