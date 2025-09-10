@@ -16,6 +16,6 @@ public class CacheConfig {
                 "deptCache", "deptJobLevelCache","deptManagerUseFlagCache","deptUsersCache",
                 "signatureCache", "deptManagerCache","hrStaffCache", "hrStaffUseFlagCache",
                 "jobLevelCache","jobLevelUsersCache", "jobLevelUseFlagCache",
-                "formTemplate");
+                "formTemplate", "permissionCheckCache", "userAllPermissionsCache");
     }
 }

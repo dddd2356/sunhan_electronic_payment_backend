@@ -25,6 +25,7 @@ import sunhan.sunhanbackend.service.UserService;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/v1/employment-contract")
@@ -41,10 +42,11 @@ public class EmploymentContractController {
     public List<ContractResponseDto> listEmploymentContracts(Authentication auth) {
         String userId = auth.getName();
         UserEntity user = userService.getUserInfo(userId);
+        Set<PermissionType> userPermissions = permissionService.getAllUserPermissions(userId);
         boolean isAdmin = (user.getRole() == Role.ADMIN)
                 || Integer.parseInt(user.getJobLevel()) >= 2
                 || (("0".equals(user.getJobLevel()) || "1".equals(user.getJobLevel())) &&
-                permissionService.hasPermission(userId, PermissionType.HR_CONTRACT));
+                userPermissions.contains(PermissionType.HR_CONTRACT));
         return service.getEmploymentContracts(userId, isAdmin);
     }
 

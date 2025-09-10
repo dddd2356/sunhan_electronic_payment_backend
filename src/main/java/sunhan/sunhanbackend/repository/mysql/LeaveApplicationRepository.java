@@ -9,10 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
-import sunhan.sunhanbackend.enums.LeaveType;
 
-import java.time.LocalDate;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -26,8 +23,9 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
      * 신청자별 휴가원 조회 (N+1 문제 해결)
      * @EntityGraph를 사용하여 연관된 applicant와 substitute 엔티티를 함께 조회합니다.
      */
-    @EntityGraph(value = "LeaveApplication.withApplicantAndSubstitute")
-    Page<LeaveApplication> findByApplicant_UserId(String applicantId, Pageable pageable);
+    @EntityGraph(attributePaths = {"applicant", "substitute"})
+    @Query("SELECT la FROM LeaveApplication la WHERE la.applicant.userId = :applicantId ORDER BY la.createdAt DESC")
+    Page<LeaveApplication> findByApplicant_UserId(@Param("applicantId") String applicantId, Pageable pageable);
 
     // 관리자가 모든 휴가 신청을 조회할 때 N+1 쿼리 방지
     @EntityGraph(value = "LeaveApplication.withApplicantAndSubstitute")
@@ -42,6 +40,7 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
     List<LeaveApplication> findByApplicantIdAndStatusWithApplicant(@Param("userId") String userId, @Param("status") LeaveApplicationStatus status);
 
     // pending용: 이미 일부 있음, 확장
+    @EntityGraph(attributePaths = {"applicant", "substitute"})
     Page<LeaveApplication> findByCurrentApproverIdAndStatusIn(String currentApproverId, Set<LeaveApplicationStatus> statuses, Pageable pageable);
 
     // completed용: 이미 일부 있음 (findByStatus, findByApplicantIdAndStatusWithPaging), 필요 시 추가
@@ -53,5 +52,7 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
     @Query("SELECT la FROM LeaveApplication la WHERE la.applicant.userId = :userId AND la.status = :status")
     Page<LeaveApplication> findByApplicantIdAndStatusWithPaging(@Param("userId") String userId, @Param("status") LeaveApplicationStatus status, Pageable pageable);
 
+    @EntityGraph(attributePaths = {"applicant", "substitute"})
     Page<LeaveApplication> findByStatusIn(Set<LeaveApplicationStatus> statuses, Pageable pageable);
+
 }

@@ -20,6 +20,7 @@ import sunhan.sunhanbackend.service.UserService;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController  // Controller 클래스에 @RestController 추가
 //@RequiredArgsConstructor  // 생성자 주입을 위한 어노테이션 추가
@@ -294,14 +295,16 @@ public class AdminController {
 
             // 문자열을 정수로 변환하여 비교
             int adminLevel = Integer.parseInt(admin.getJobLevel());
+            // 🔧 권한을 메서드 시작 부분에서 한 번만 조회
+            Set<PermissionType> adminPermissions = permissionService.getAllUserPermissions(adminUserId);
 
             if (adminLevel == 1) {
                 // jobLevel 1인 경우 부서 내 사용자만 조회
                 List<UserEntity> deptUsers = userService.getUsersByDeptCode(adminUserId, admin.getDeptCode());
                 System.out.println("Found department users: " + deptUsers.size());
                 return ResponseEntity.ok(deptUsers);
-            }else if ((adminLevel == 0 || adminLevel == 1) && permissionService.hasPermission(adminUserId, PermissionType.MANAGE_USERS)) {
-                // jobLevel 0이면서 deptCode가 AD인 경우
+            }else if ((adminLevel == 0 || adminLevel == 1) && adminPermissions.contains(PermissionType.MANAGE_USERS)) {
+                // jobLevel 0이면서 MANAGE_USERS 권한이 있는 경우
                 List<UserEntity> manageableUsers = userService.getManageableUsers(adminUserId);
                 System.out.println("Found manageable users: " + manageableUsers.size());
                 return ResponseEntity.ok(manageableUsers);

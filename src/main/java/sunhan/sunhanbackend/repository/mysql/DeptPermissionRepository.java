@@ -9,6 +9,7 @@ import sunhan.sunhanbackend.enums.PermissionType;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Repository
 public interface DeptPermissionRepository extends JpaRepository<DeptPermissionEntity, Long> {
@@ -23,4 +24,16 @@ public interface DeptPermissionRepository extends JpaRepository<DeptPermissionEn
 
     @Query("SELECT DISTINCT dp.deptCode FROM DeptPermissionEntity dp WHERE dp.permissionType = :permissionType")
     List<String> findDeptCodesByPermissionType(@Param("permissionType") PermissionType permissionType);
+
+    // 🆕 여러 부서의 권한을 한 번에 조회 (N+1 해결)
+    @Query("SELECT dp FROM DeptPermissionEntity dp WHERE dp.deptCode IN :deptCodes")
+    List<DeptPermissionEntity> findByDeptCodeIn(@Param("deptCodes") Set<String> deptCodes);
+
+    // 🆕 여러 사용자의 부서 권한을 한 번에 조회
+    @Query("SELECT dp FROM DeptPermissionEntity dp " +
+            "JOIN UserEntity u ON u.deptCode = dp.deptCode " +
+            "WHERE u.userId IN :userIds")
+    List<DeptPermissionEntity> findDeptPermissionsByUserIds(@Param("userIds") List<String> userIds);
+    @Query("SELECT dp FROM DeptPermissionEntity dp WHERE dp.deptCode = :deptCode")
+    Set<DeptPermissionEntity> getAllDeptPermissions(@Param("deptCode") String deptCode);
 }

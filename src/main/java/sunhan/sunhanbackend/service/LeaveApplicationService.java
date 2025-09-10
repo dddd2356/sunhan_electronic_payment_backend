@@ -358,8 +358,9 @@ public class LeaveApplicationService {
                         && signer.getDeptCode().equals(applicant.getDeptCode())
                         && "DEPARTMENT_HEAD_APPROVAL".equals(step);
             case "hrStaff":
+                Set<PermissionType> signerPermissions = permissionService.getAllUserPermissions(userId);
                 return ("0".equals(signer.getJobLevel()) || "1".equals(signer.getJobLevel()))
-                        && permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION)
+                        && signerPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)
                         && signer.isAdmin()
                         && "HR_STAFF_APPROVAL".equals(step);
             case "centerDirector":
@@ -590,8 +591,9 @@ public class LeaveApplicationService {
 
         String currentStep = application.getCurrentApprovalStep();
         boolean isHrFinalStep = "HR_FINAL_APPROVAL".equals(currentStep) || "PENDING_HR_FINAL".equals(currentStep);
+        Set<PermissionType> approverPermissions = permissionService.getAllUserPermissions(approverId);
         boolean isHrAdmin = approver.getRole() == Role.ADMIN &&
-                permissionService.hasPermission(approverId, PermissionType.HR_LEAVE_APPLICATION);
+                approverPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
 
 
         if (jobLevel < 2 && !(isHrFinalStep && isHrAdmin)) {
@@ -896,8 +898,9 @@ public class LeaveApplicationService {
         else if (LeaveApplicationStatus.PENDING_HR_STAFF.equals(application.getStatus())) {
             // 인사팀(AD) 부서 소속이며, 특정 권한을 가진 사용자인지 확인
             // 예시: jobLevel 0 또는 1
+            Set<PermissionType> approverPermissions = permissionService.getAllUserPermissions(approverId);
             boolean isHrGroupApprover = Arrays.asList("0", "1").contains(approver.getJobLevel()) &&
-                    permissionService.hasPermission(approverId, PermissionType.HR_LEAVE_APPLICATION);
+                    approverPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
             if (isHrGroupApprover) {
                 isAuthorized = true;
             }
@@ -1201,7 +1204,8 @@ public class LeaveApplicationService {
         Page<LeaveApplication> page;
 
         // 3. 사용자가 인사팀("AD") 소속인지에 따라 다른 쿼리 로직을 실행합니다.
-        if (permissionService.hasPermission(approverId, PermissionType.HR_LEAVE_APPLICATION)) {
+        Set<PermissionType> approverPermissions = permissionService.getAllUserPermissions(approverId);
+        if (approverPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)) {
             page = leaveApplicationRepository.findByStatusIn(
                     Set.of(LeaveApplicationStatus.PENDING_HR_STAFF, LeaveApplicationStatus.PENDING_HR_FINAL),
                     pageable
@@ -1430,8 +1434,11 @@ public class LeaveApplicationService {
                 Optional<UserEntity> applicantUser = userRepository.findByUserId(applicantId);
 
                 // 2. 신청자가 인사팀 권한이 있는 소속인지 확인
-                boolean isApplicantInHR = applicantUser.isPresent() &&
-                        permissionService.hasPermission(applicantUser.get().getUserId(), PermissionType.HR_LEAVE_APPLICATION);
+                boolean isApplicantInHR = false;
+                if (applicantUser.isPresent()) {
+                    Set<PermissionType> applicantPermissions = permissionService.getAllUserPermissions(applicantUser.get().getUserId());
+                    isApplicantInHR = applicantPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
+                }
 
                 // 3. 신청자가 인사팀 소속일 경우, 다음 승인자를 null로 설정하여 그룹 승인 대기로 표시
                 if (isApplicantInHR) {
@@ -1638,14 +1645,16 @@ public class LeaveApplicationService {
                 return "1".equals(approver.getJobLevel())
                         && approver.getDeptCode().equals(applicant.getDeptCode());
             case "HR_STAFF_APPROVAL":
+                Set<PermissionType> approverPermissions = permissionService.getAllUserPermissions(approver.getUserId());
                 return ("0".equals(approver.getJobLevel()) ||"1".equals(approver.getJobLevel()))
-                        && permissionService.hasPermission(approver.getUserId(), PermissionType.HR_LEAVE_APPLICATION)
+                        && approverPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)
                         && approver.isAdmin();
             case "CENTER_DIRECTOR_APPROVAL":
                 return "2".equals(approver.getJobLevel());
             case "HR_FINAL_APPROVAL":
+                Set<PermissionType> finalApproverPermissions = permissionService.getAllUserPermissions(approver.getUserId());
                 return ("0".equals(approver.getJobLevel()) || "1".equals(approver.getJobLevel()))
-                        && permissionService.hasPermission(approver.getUserId(), PermissionType.HR_LEAVE_APPLICATION)
+                        && finalApproverPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)
                         && approver.isAdmin();
             case "ADMIN_DIRECTOR_APPROVAL":
                 return "4".equals(approver.getJobLevel());
@@ -1671,8 +1680,10 @@ public class LeaveApplicationService {
         UserEntity currentUser = userService.getUserInfo(userId);
         Page<LeaveApplication> page;
 
+        Set<PermissionType> currentUserPermissions = permissionService.getAllUserPermissions(currentUser.getUserId());
         boolean isHrStaff = currentUser.isAdmin() && ("0".equals(currentUser.getJobLevel()) || "1".equals(currentUser.getJobLevel()))
-                && permissionService.hasPermission(currentUser.getUserId(), PermissionType.HR_LEAVE_APPLICATION);
+                && currentUserPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
+
         boolean isCenterDirector = currentUser.isAdmin() && currentUser.getJobLevel() != null && Integer.parseInt(currentUser.getJobLevel()) >= 2;
 
         if (isHrStaff || isCenterDirector) {

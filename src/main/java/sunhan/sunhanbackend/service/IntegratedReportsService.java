@@ -57,8 +57,9 @@ public class IntegratedReportsService {
                 String jobLevel = currentUserCompleted != null ? currentUserCompleted.getJobLevel() : null;
                 Role userRole = currentUserCompleted != null ? currentUserCompleted.getRole() : null;
 
-                boolean hasHrContractPermissionCompleted = permissionService.hasPermission(userId, PermissionType.HR_CONTRACT);
-                boolean hasHrLeavePermissionCompleted = permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION);
+                Set<PermissionType> userPermissions = permissionService.getAllUserPermissions(userId);
+                boolean hasHrContractPermissionCompleted = userPermissions.contains(PermissionType.HR_CONTRACT);
+                boolean hasHrLeavePermissionCompleted = userPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
 
                 // 1) jobLevel 2 or 6 + ADMIN: 모든 문서 조회 (둘 다 전체)
                 if (("2".equals(jobLevel) || "6".equals(jobLevel)) && userRole == Role.ADMIN) {
@@ -121,8 +122,9 @@ public class IntegratedReportsService {
                 UserEntity currentUser = userRepository.findByUserId(userId).orElse(null);
 
                 // 2. 인사팀 권한 확인
-                boolean hasHrContractPermission = permissionService.hasPermission(userId, PermissionType.HR_CONTRACT);
-                boolean hasHrLeavePermission = permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION);
+                Set<PermissionType> currentUserPermissions = permissionService.getAllUserPermissions(userId);
+                boolean hasHrContractPermission = currentUserPermissions.contains(PermissionType.HR_CONTRACT);
+                boolean hasHrLeavePermission = currentUserPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
 
                 // 3. 인사팀 소속 여부 판단 (jobLevel 0 또는 1, ADMIN 권한)
                 boolean isHrStaff = currentUser != null &&
@@ -193,8 +195,9 @@ public class IntegratedReportsService {
         // 1. 현재 사용자 정보 조회
         UserEntity currentUser = userRepository.findByUserId(userId).orElse(null);
 
-        boolean hasHrContractPermission = permissionService.hasPermission(userId, PermissionType.HR_CONTRACT);
-        boolean hasHrLeavePermission = permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION);
+        Set<PermissionType> userPermissions = permissionService.getAllUserPermissions(userId);
+        boolean hasHrContractPermission = userPermissions.contains(PermissionType.HR_CONTRACT);
+        boolean hasHrLeavePermission = userPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
 
         // 2. 인사팀 소속인지 확인하는 로직 추가
         boolean isHrStaff = currentUser != null &&

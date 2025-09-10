@@ -595,8 +595,9 @@ public class LeaveApplicationController {
                     return jobLevel >= 1 && canManageDepartment(userId, application.getApplicantId());
 
                 case "hrStaff":
+                    Set<PermissionType> userPermissions = permissionService.getAllUserPermissions(userId);
                     return "0".equals(user.getJobLevel())
-                            && permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION)
+                            && userPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)
                             && user.isAdmin();
                 case "centerDirector":
                     // 센터장 권한 체크 (jobLevel 2 이상)

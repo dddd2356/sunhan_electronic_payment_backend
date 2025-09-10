@@ -591,8 +591,9 @@ public class UserService {
         }
 
         if (manager.getRole() == Role.ADMIN && (managerLevel == 0 || managerLevel == 1)) {
-            boolean hasLeavePermission = permissionService.hasPermission(managerUserId, PermissionType.HR_LEAVE_APPLICATION);
-            boolean hasContractPermission = permissionService.hasPermission(managerUserId, PermissionType.HR_CONTRACT);
+            Set<PermissionType> managerPermissions = permissionService.getAllUserPermissions(managerUserId);
+            boolean hasLeavePermission = managerPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
+            boolean hasContractPermission = managerPermissions.contains(PermissionType.HR_CONTRACT);
             return hasLeavePermission || hasContractPermission;
         }
 

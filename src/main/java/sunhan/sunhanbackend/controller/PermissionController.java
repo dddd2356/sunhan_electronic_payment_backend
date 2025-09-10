@@ -13,6 +13,7 @@ import sunhan.sunhanbackend.service.PermissionService;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/v1/admin/permissions")
@@ -30,12 +31,12 @@ public class PermissionController {
         try {
             Map<String, Object> response = new HashMap<>();
             response.put("userId", userId);
-            response.put("hasHrLeavePermission",
-                    permissionService.hasPermission(userId, PermissionType.HR_LEAVE_APPLICATION));
-            response.put("hasHrContractPermission",
-                    permissionService.hasPermission(userId, PermissionType.HR_CONTRACT));
+            Set<PermissionType> userPermissions = permissionService.getAllUserPermissions(userId);
+            response.put("hasHrLeavePermission", userPermissions.contains(PermissionType.HR_LEAVE_APPLICATION));
+            response.put("hasHrContractPermission", userPermissions.contains(PermissionType.HR_CONTRACT));
             response.put("hasAnyHrPermission",
-                    permissionService.hasAnyHrPermission(userId));
+                    userPermissions.contains(PermissionType.HR_LEAVE_APPLICATION) ||
+                            userPermissions.contains(PermissionType.HR_CONTRACT));
 
             return ResponseEntity.ok(response);
         } catch (Exception e) {

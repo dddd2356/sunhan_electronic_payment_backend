@@ -37,6 +37,7 @@ public class ContractService {
     private final FormService formService;
     private final UserService userService;
     private final PdfGenerationService pdfGenerationService; // 비동기 서비스 주입
+
     // 기존 메서드 - 모든 계약서 조회 (하위 호환성 유지)
     public Page<ContractResponseDto> getContracts(String userId, boolean isAdmin, Pageable pageable) {
         Page<EmploymentContract> page = isAdmin
@@ -49,11 +50,19 @@ public class ContractService {
     public List<ContractResponseDto> getEmploymentContracts(String userId, boolean isAdmin) {
         List<EmploymentContract> contracts;
         if (isAdmin) {
-            // findByContractTypeWithUsers 메서드 사용
-            contracts = repo.findByContractTypeWithUsers(ContractType.EMPLOYMENT_CONTRACT);
+            // 모든 계약을 한 번에 조회
+            contracts = repo.findAllWithUsers(Pageable.unpaged()).getContent();
+            // 메모리에서 필터링
+            contracts = contracts.stream()
+                    .filter(c -> c.getContractType() == ContractType.EMPLOYMENT_CONTRACT)
+                    .collect(Collectors.toList());
         } else {
-            // findByEmployeeIdAndContractTypeWithUsers 메서드 사용
-            contracts = repo.findByEmployeeIdAndContractTypeWithUsers(userId, ContractType.EMPLOYMENT_CONTRACT);
+            // 사용자 관련 모든 계약을 한 번에 조회
+            contracts = repo.findContractsByCreatorOrEmployeeWithUsers(userId);
+            // 메모리에서 필터링
+            contracts = contracts.stream()
+                    .filter(c -> c.getContractType() == ContractType.EMPLOYMENT_CONTRACT)
+                    .collect(Collectors.toList());
         }
         return convertToDtoBatch(contracts);
     }
