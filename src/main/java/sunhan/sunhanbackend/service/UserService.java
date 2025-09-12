@@ -70,6 +70,8 @@ public class UserService {
         dto.setJobLevel(user.getJobLevel());
         dto.setPhone(user.getPhone());
         dto.setAddress(user.getAddress());
+        dto.setDetailAddress(user.getDetailAddress());
+        dto.setSignimage(user.getSignimage());
         dto.setRole(user.getRole() != null ? user.getRole().toString() : null);
 
         // 🔹 엔티티를 String으로 변환
@@ -117,6 +119,7 @@ public class UserService {
     public UserEntity updateProfile(String userId,
                                     String phone,
                                     String address,
+                                    String detailAddress,
                                     String currentPassword,
                                     String newPassword) {
         UserEntity user = getUserInfo(userId);
@@ -132,7 +135,10 @@ public class UserService {
         if (address != null && !address.trim().isEmpty()) {
             user.setAddress(address.trim());
         }
-
+        // 상세 주소 업데이트
+        if (detailAddress != null && !detailAddress.trim().isEmpty()) {
+            user.setDetailAddress(detailAddress.trim());
+        }
         // 비밀번호 업데이트 로직
         if (newPassword != null && !newPassword.trim().isEmpty()) {
             if (currentPassword == null || currentPassword.isEmpty() ||

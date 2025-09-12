@@ -15,6 +15,8 @@ public class UserResponseDto {
     private String jobLevel;
     private String phone;
     private String address;
+    private String detailAddress;
     private String role;
     private List<String> permissions; // UserPermissionEntity + DeptPermissionEntity
+    private byte[] signimage;
 }

@@ -69,34 +69,6 @@ public class FormService {
         }
     }
 
-    /**
-     * EmploymentContract 엔티티를 PdfRenderer가 처리할 수 있는 JSON 형태로 변환
-     * formDataJson 필드에서 JSON 데이터를 그대로 반환
-     */
-    private String convertToJson(EmploymentContract contract) {
-        try {
-            // formDataJson이 이미 올바른 JSON 형태라면 그대로 반환
-            String formDataJson = contract.getFormDataJson();
-
-            if (formDataJson == null || formDataJson.isEmpty()) {
-                throw new IllegalStateException("계약서 데이터가 비어있습니다");
-            }
-
-            // JSON 유효성 검사
-            try {
-                JsonNode jsonNode = objectMapper.readTree(formDataJson);
-                // 다시 문자열로 변환하여 포맷팅 정리
-                return objectMapper.writeValueAsString(jsonNode);
-            } catch (Exception e) {
-                throw new IllegalStateException("계약서 JSON 데이터가 유효하지 않습니다: " + e.getMessage(), e);
-            }
-
-        } catch (Exception e) {
-            log.error("JSON 변환 실패: contractId={}, error={}", contract.getId(), e.getMessage(), e);
-            throw new IllegalStateException("계약서 데이터를 처리하는데 실패했습니다: " + e.getMessage(), e);
-        }
-    }
-
     // signatures 노드에 개별 서명 항목이 존재하는지 확인하고 업데이트/생성하는 헬퍼 메서드
     private void ensureSignatureEntry(ObjectNode signaturesNode, String role, String userId, Boolean isSigned) {
         // null이나 빈 문자열 체크 강화
@@ -207,7 +179,9 @@ public class FormService {
                     objectNode.put("applicantName", a.getUserName());
                     objectNode.put("applicantDept", a.getDeptCode());
                     objectNode.put("applicantPosition", a.getJobLevel());
-                    objectNode.put("applicantContact", a.getPhone());
+                    String fullAddress = a.getAddress() != null ? a.getAddress() : "";
+                    String detailAddress = a.getDetailAddress() != null ? a.getDetailAddress() : "";
+                    objectNode.put("applicantContact", (fullAddress + " " + detailAddress).trim());
                     objectNode.put("applicantPhone", a.getPhone());
                 });
             }
@@ -247,7 +221,6 @@ public class FormService {
             objectNode.put("isAdminDirectorApproved", application.getIsAdminDirectorApproved() != null ? application.getIsAdminDirectorApproved() : false);
             objectNode.put("isCeoDirectorApproved", application.getIsCeoDirectorApproved() != null ? application.getIsCeoDirectorApproved() : false);
 
-            // ========== 수정된 부분: 실제 서명자 정보 사용 ==========
             // signatures 객체가 이미 formDataJson에 있다면 그것을 우선 사용
             if (!objectNode.has("signatures") || !objectNode.get("signatures").isObject()) {
                 objectNode.set("signatures", objectMapper.createObjectNode());
@@ -272,7 +245,7 @@ public class FormService {
             ensureSignatureEntryFromExistingOrDefault(signaturesNode, "departmentHead",
                     findApproverIdByJobLevel("1", deptCode), application.getIsDeptHeadApproved());
 
-            // ★★★ 인사팀 서명: 기존 서명 데이터에서 실제 서명자를 찾아서 사용 ★★★
+            // 인사팀 서명: 기존 서명 데이터에서 실제 서명자를 찾아서 사용 ★★★
             ensureHrStaffSignatureFromExisting(signaturesNode, application.getIsHrStaffApproved());
 
             // 나머지 승인자들도 기존 서명 우선
@@ -394,7 +367,6 @@ public class FormService {
             }
             Path target = userDir.resolve(filename);
 
-            // ✅ 이 한 줄을 수정해 주세요!
             byte[] pdfBytes = getPdfBytes(contract);
 
             Files.write(target, pdfBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);

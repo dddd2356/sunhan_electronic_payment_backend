@@ -2,30 +2,22 @@ package sunhan.sunhanbackend.controller;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import sunhan.sunhanbackend.dto.request.UpdateProfileRequestDto;
-import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
-import sunhan.sunhanbackend.dto.response.ReportsResponseDto;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
-import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
-import sunhan.sunhanbackend.enums.ContractType;
-import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.service.ContractService;
 import sunhan.sunhanbackend.service.LeaveApplicationService;
 import sunhan.sunhanbackend.service.UserService;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @RestController
 @Slf4j
@@ -87,9 +79,26 @@ public class UserController {
     @PutMapping("/update-profile/{userId}")
     public ResponseEntity<?> updateProfile(@PathVariable String userId,
                                            @RequestBody UpdateProfileRequestDto requestDto) {
-        // 사용자 인증/인가 로직 (예: JWT 토큰에서 userId를 가져와 경로 변수 userId와 일치하는지 확인)
-        UserEntity updatedUser = userService.updateProfile(userId, requestDto.getPhone(), requestDto.getAddress(), requestDto.getCurrentPassword(), requestDto.getNewPassword());
-        return ResponseEntity.ok(updatedUser); // 또는 성공 메시지
+        try {
+            // 사용자 인증/인가 로직 (예: JWT 토큰에서 userId를 가져와 경로 변수 userId와 일치하는지 확인)
+            UserEntity updatedUser = userService.updateProfile(
+                    userId,
+                    requestDto.getPhone(),
+                    requestDto.getAddress(),
+                    requestDto.getDetailAddress(),
+                    requestDto.getCurrentPassword(),
+                    requestDto.getNewPassword()
+            );
+            return ResponseEntity.ok(updatedUser);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("Optimistic locking failure for user {}: {}", userId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.CONFLICT) // 409 상태 코드 반환
+                    .body(Map.of("message", "다른 사용자가 동시에 정보를 수정했습니다. 잠시 후 다시 시도해주세요."));
+        } catch (Exception e) {
+            log.error("Error updating profile for user {}: {}", userId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "프로필 업데이트 중 오류가 발생했습니다."));
+        }
     }
 
     @PostMapping("/{userId}/signature")

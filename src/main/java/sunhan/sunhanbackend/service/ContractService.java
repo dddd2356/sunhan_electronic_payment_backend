@@ -322,10 +322,21 @@ public class ContractService {
                 UserEntity emp = userRepository.findByUserId(employeeId).orElse(null);
                 if (emp != null) {
                     formData.put("employeeName",   emp.getUserName());
-                    formData.put("employeeAddress",emp.getAddress());
+
+                    // 주소와 상세 주소를 결합하여 하나의 필드에 저장
+                    String fullAddress = "";
+                    if (emp.getAddress() != null) {
+                        fullAddress += emp.getAddress();
+                    }
+                    if (emp.getDetailAddress() != null && !emp.getDetailAddress().isEmpty()) {
+                        if (!fullAddress.isEmpty()) {
+                            fullAddress += " ";
+                        }
+                        fullAddress += emp.getDetailAddress();
+                    }
+                    formData.put("employeeAddress", fullAddress);
                     formData.put("employeePhone",  emp.getPhone());
                 }
-
 
                 // 3) Signature Blob → Base64 URL 주입
                 if (emp != null && emp.getSignimage() != null) {

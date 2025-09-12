@@ -1710,6 +1710,15 @@ public class LeaveApplicationService {
         return page.map(app -> {
             UserEntity applicant = userService.getUserInfo(app.getApplicantId());
             UserEntity substitute = app.getSubstituteId() != null ? userService.getUserInfo(app.getSubstituteId()) : null;
+
+            // ✅ NullPointerException 방지를 위해 null-safe하게 처리
+            if (applicant == null) {
+                // 신청자 정보가 없는 경우, 임시 DTO를 반환하거나 에러 로그를 남깁니다.
+                log.warn("신청자 ID에 해당하는 사용자 정보가 없습니다: {}", app.getApplicantId());
+                // 대체 객체를 생성하거나, null을 안전하게 처리할 수 있는 DTO를 반환합니다.
+                return LeaveApplicationResponseDto.fromEntity(app, null, substitute);
+            }
+
             return LeaveApplicationResponseDto.fromEntity(app, applicant, substitute);
         });
     }

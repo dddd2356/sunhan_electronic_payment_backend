@@ -39,6 +39,8 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     private String deptCode;  // 부서
     private String phone;
     private String address;
+    @Column(name = "detail_address")
+    private String detailAddress;
     @Column(name = "useflag")
     private String useFlag;
     @Column(name = "signpath")

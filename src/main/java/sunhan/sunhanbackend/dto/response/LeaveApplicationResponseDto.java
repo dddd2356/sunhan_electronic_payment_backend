@@ -84,7 +84,9 @@ public class LeaveApplicationResponseDto {
         dto.setApplicantName(applicant.getUserName());
         dto.setApplicantDept(applicant.getDeptCode());
         dto.setApplicantPosition(applicant.getJobLevel());
-        dto.setApplicantContact(applicant.getAddress());
+        String fullAddress = applicant.getAddress() != null ? applicant.getAddress() : "";
+        String detailAddress = applicant.getDetailAddress() != null ? applicant.getDetailAddress() : "";
+        dto.setApplicantContact((fullAddress + " " + detailAddress).trim());
         dto.setApplicantPhone(applicant.getPhone());
 
         if (substitute != null) {
