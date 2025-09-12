@@ -140,11 +140,7 @@ public class ContractService {
      */
     @Transactional(readOnly = true)
     public List<ContractResponseDto> getContractsByUserId(String userId) {
-        // 🔧 JOIN FETCH를 사용하는 새로운 메서드로 교체
-        List<EmploymentContract> list = repo.findByEmployeeIdAndContractTypeWithUsers(userId, ContractType.EMPLOYMENT_CONTRACT);
-
-        // 🔧 N+1을 해결하는 배치 변환 메서드 사용 (이미 구현되어 있음)
-        return convertToDtoBatch(list);
+        return repo.findContractDtosByEmployeeId(userId, ContractType.EMPLOYMENT_CONTRACT);
     }
 
     public ContractResponseDto updateForm(Long id, String userId, UpdateFormRequestDto req) throws IOException { // IOException 추가

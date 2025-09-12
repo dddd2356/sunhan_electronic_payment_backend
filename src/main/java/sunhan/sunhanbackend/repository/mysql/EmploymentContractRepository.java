@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import sunhan.sunhanbackend.dto.response.ContractResponseDto;
 import sunhan.sunhanbackend.entity.mysql.EmploymentContract;
 import sunhan.sunhanbackend.enums.ContractStatus;
 import sunhan.sunhanbackend.enums.ContractType;
@@ -70,4 +71,22 @@ public interface EmploymentContractRepository extends JpaRepository<EmploymentCo
     // 단건 조회 시 엔티티 그래프 적용 (필요 시 사용)
     @EntityGraph("EmploymentContract.withUsers")
     Optional<EmploymentContract> findWithUsersById(Long id);
+
+    @Query("""
+    SELECT new sunhan.sunhanbackend.dto.response.ContractResponseDto(
+        ec.id, 
+        ec.status, 
+        ec.createdAt, 
+        ec.updatedAt,
+        ec.contractType,
+        ec.printable
+    )
+    FROM EmploymentContract ec
+    WHERE ec.employee.userId = :employeeId 
+    AND ec.contractType = :contractType
+    ORDER BY ec.createdAt DESC
+    """)
+    List<ContractResponseDto> findContractDtosByEmployeeId(
+            @Param("employeeId") String employeeId,
+            @Param("contractType") ContractType contractType);
 }
