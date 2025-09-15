@@ -19,6 +19,8 @@
   "treatmentImprovementExpenses": "",
   "specialAllowance": "",
   "adjustmentAllowance": "",
+  "overtime": "",
+  "nDuty": "",
   "overtimePay": "",
   "nDutyAllowance": "",
   "regularHourlyWage": "",
