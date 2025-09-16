@@ -133,7 +133,6 @@
 
 ---
 
-## 📄 라이선스 / 문의
+## 📄 문의
 
--   **License**: MIT
--   [cite_start]**Contact**: dudgus2109@gmail.com [cite: 177]
+-   **Contact**: dudgus2109@gmail.com
