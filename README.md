@@ -23,7 +23,7 @@
 ### 주요 API 엔드포인트
 
 -   **인증 및 사용자 관리**
-    -  `POST /api/v1/auth/sign-in` : 로그인 처리. 최초 사용자인 경우 gshhis DB 조회 및 MariaDB로 데이터 이전.
+    -  `POST /api/v1/auth/sign-in` : 로그인 처리. 최초 사용자인 경우 OracleDB 조회 및 MariaDB로 데이터 이전.
     -  `POST /api/v1/auth/logout/web` : 웹 로그아웃. 쿠키 기반 JWT 토큰 삭제.
     -  `GET /api/v1/auth/verify-token` : JWT 토큰 유효성 검사.
     -  `GET /api/v1/user/me` : 현재 로그인한 사용자 정보 조회.
@@ -91,8 +91,8 @@
 
 ## 🗄️ 데이터베이스
 
--   **gshhis (Oracle)**: 병원의 기간계 인사 DB. 로그인 시 사용자의 재직 여부(`useflag`) 및 기본 정보(`usrid`, `usrkorname`, `deptcode`, `jobtype`)를 조회하는 데 사용됩니다.
--   **sunhan (MariaDB)**: 본 시스템의 메인 DB. `gshhis`에서 가져온 사용자 정보와 추가된 개인정보(연락처, 주소, 서명이미지 경로 등) 및 모든 결재 문서 데이터를 저장하고 관리합니다.
+-   **(Oracle)**: 병원의 기간계 인사 DB. 로그인 시 사용자의 재직 여부(`useflag`) 및 기본 정보(`usrid`, `usrkorname`, `deptcode`, `jobtype`)를 조회하는 데 사용됩니다.
+-   **(MariaDB)**: 본 시스템의 메인 DB. `oracle`에서 가져온 사용자 정보와 추가된 개인정보(연락처, 주소, 서명이미지 경로 등) 및 모든 결재 문서 데이터를 저장하고 관리합니다.
 
 ---
 
