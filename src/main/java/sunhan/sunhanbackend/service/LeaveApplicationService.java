@@ -16,23 +16,32 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
-import sunhan.sunhanbackend.dto.request.LeaveSummaryDto;
 import sunhan.sunhanbackend.dto.response.AttachmentResponseDto;
 import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
 import sunhan.sunhanbackend.dto.request.LeaveApplicationUpdateFormRequestDto;
 import sunhan.sunhanbackend.dto.request.SignLeaveApplicationRequestDto;
-import sunhan.sunhanbackend.dto.response.ReportsResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplicationAttachment;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.entity.mysql.approval.ApprovalLine;
+import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStep;
+import sunhan.sunhanbackend.entity.mysql.approval.DocumentApprovalProcess;
 import sunhan.sunhanbackend.enums.*;
+import sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus;
+import sunhan.sunhanbackend.enums.approval.ApproverType;
+import sunhan.sunhanbackend.enums.approval.DocumentType;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationAttachmentRepository;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
+import sunhan.sunhanbackend.repository.mysql.approval.ApprovalLineRepository;
+import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
+import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
+import sunhan.sunhanbackend.template.NotificationTemplate;
 
 import java.io.File;
 import java.io.IOException;
@@ -43,14 +52,10 @@ import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
-import static java.util.stream.Collectors.toList;
 
 @Service
 @Slf4j
@@ -62,12 +67,17 @@ public class LeaveApplicationService {
     private final ObjectMapper objectMapper;
     private final FormService formService;
     private final UserService userService;
+    private final ApprovalProcessService approvalProcessService;
+    private final DocumentApprovalProcessRepository processRepository;
     private static final DateTimeFormatter ISO_LOCAL = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private final PdfGenerationService pdfGenerationService; // 비동기 서비스 주입
     private final PermissionService permissionService;
     private final LeaveApplicationAttachmentRepository attachmentRepository;
     @Value("${file.upload-dir}") // application.properties에 경로 설정 필요
     private String uploadDir;
+    private final NotificationService notificationService;
+    private final ApprovalLineRepository approvalLineRepository;
+
     private String toIsoString(Object maybeDate) {
         if (maybeDate == null) return LocalDateTime.now().format(ISO_LOCAL);
 
@@ -339,41 +349,19 @@ public class LeaveApplicationService {
     }
 
     private boolean canSignAtPosition(LeaveApplication app, String userId, String signatureType) {
-        // Optional.ofNullable을 사용해 널 안전하게 조회
-        UserEntity signer = userRepository.findByUserId(userId).orElse(null);
-        UserEntity applicant = userRepository.findByUserId(app.getApplicantId()).orElse(null);
+        // 1. 신청자 서명은 결재라인 사용 여부와 무관하게 허용
+        if ("applicant".equals(signatureType)) {
+            return (userId.equals(app.getApplicantId()) &&
+                    app.getStatus() == LeaveApplicationStatus.DRAFT);
+        }
 
-        // 사용자가 존재하지 않으면 즉시 false 반환
-        if (signer == null || applicant == null) return false;
-        log.debug("서명자 ID: {}, jobLevel: '{}', deptCode: '{}', isAdmin: {}",
-                signer.getUserId(), signer.getJobLevel(), signer.getDeptCode(), signer.isAdmin());
-        String step = app.getCurrentApprovalStep();
-        switch (signatureType) {
-            case "applicant":
-                return userId.equals(app.getApplicantId()) && app.getStatus() == LeaveApplicationStatus.DRAFT;
-            case "substitute":
-                return userId.equals(app.getSubstituteId()) && "SUBSTITUTE_APPROVAL".equals(step);
-            case "departmentHead":
-                return "1".equals(signer.getJobLevel())
-                        && signer.getDeptCode().equals(applicant.getDeptCode())
-                        && "DEPARTMENT_HEAD_APPROVAL".equals(step);
-            case "hrStaff":
-                Set<PermissionType> signerPermissions = permissionService.getAllUserPermissions(userId);
-                return ("0".equals(signer.getJobLevel()) || "1".equals(signer.getJobLevel()))
-                        && signerPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)
-                        && signer.isAdmin()
-                        && "HR_STAFF_APPROVAL".equals(step);
-            case "centerDirector":
-                return "2".equals(signer.getJobLevel())
-                        && "CENTER_DIRECTOR_APPROVAL".equals(step);
-            case "adminDirector":
-                return "4".equals(signer.getJobLevel())
-                        && "ADMIN_DIRECTOR_APPROVAL".equals(step);
-            case "ceoDirector":
-                return "5".equals(signer.getJobLevel())
-                        && "CEO_DIRECTOR_APPROVAL".equals(step);
-            default:
-                return false;
+        // 2. 그 외 서명은 결재라인 기반일 경우에만 진행
+        if (app.isUsingApprovalLine()) {
+            // 모든 승인자는 currentApproverId와 일치해야 함
+            return userId.equals(app.getCurrentApproverId());
+        } else {
+            // ❌ 결재 라인이 없는 상태(DRAFT 상태)에서 신청자 외 다른 서명을 시도하면 에러 발생 (기존 로직 유지)
+            throw new IllegalStateException("하드코딩 방식은 더 이상 지원하지 않습니다.");
         }
     }
 
@@ -436,136 +424,215 @@ public class LeaveApplicationService {
     }
 
     /**
-     * 휴가원 제출 (드래프트 -> 첫 승인 단계)
+     * 휴가원 제출 - 결재라인 기반
      */
     @Transactional
-    public LeaveApplication submitLeaveApplication(Long id, String userId) {
-        LeaveApplication application = getOrThrow(id);
+    public LeaveApplication submitLeaveApplication(
+            Long id,
+            Long approvalLineId,
+            String userId
+    ) {
+        LeaveApplication application = leaveApplicationRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("휴가원을 찾을 수 없습니다: " + id));
 
+        // 1. 권한 확인
         if (!application.getApplicantId().equals(userId)) {
             throw new AccessDeniedException("휴가원 작성자만 제출할 수 있습니다.");
         }
-        if (application.getStatus() != LeaveApplicationStatus.DRAFT && application.getStatus() != LeaveApplicationStatus.REJECTED) {
-            throw new IllegalStateException("드래프트 또는 반려 상태의 휴가원만 제출할 수 있습니다.");
+
+        // 2. 상태 확인
+        if (application.getStatus() != LeaveApplicationStatus.DRAFT &&
+                application.getStatus() != LeaveApplicationStatus.REJECTED) {
+            throw new IllegalStateException("임시저장 또는 반려 상태의 휴가원만 제출할 수 있습니다.");
         }
 
+        // ✅ 3. 결재라인 필수 체크
+        if (approvalLineId == null) {
+            throw new IllegalArgumentException("결재라인을 선택해주세요.");
+        }
+
+        // 4. 신청자 정보 조회
         UserEntity applicant = userRepository.findByUserId(userId)
                 .orElseThrow(() -> new EntityNotFoundException("신청자 정보를 찾을 수 없습니다: " + userId));
 
-        if (applicant == null) {
-            throw new EntityNotFoundException("신청자 정보를 찾을 수 없습니다: " + userId);
+        // 5. formDataJson 파싱 및 유효성 검사
+        Map<String, Object> formDataMap = new HashMap<>();
+        try {
+            if (application.getFormDataJson() != null && !application.getFormDataJson().isEmpty()) {
+                formDataMap = objectMapper.readValue(
+                        application.getFormDataJson(),
+                        new TypeReference<Map<String, Object>>() {}
+                );
+            }
+        } catch (JsonProcessingException e) {
+            log.error("formDataJson 파싱 실패: {}", e.getMessage());
+            throw new IllegalArgumentException("휴가원 데이터 형식이 올바르지 않습니다.");
         }
 
+        // 6. 필수 데이터 검증
+        LeaveApplicationUpdateFormRequestDto formDataDto =
+                objectMapper.convertValue(formDataMap, LeaveApplicationUpdateFormRequestDto.class);
+
+        // ← 반드시 추가: 기존 formDataMap에 signatures가 있으면 DTO에 보존
         try {
-            // formDataJson을 Map으로 파싱
-            Map<String, Object> formDataMap = new HashMap<>();
-            if (application.getFormDataJson() != null && !application.getFormDataJson().isEmpty()) {
-                formDataMap = objectMapper.readValue(application.getFormDataJson(), new TypeReference<Map<String, Object>>() {});
+            Object signaturesObj = formDataMap.get("signatures");
+            if (signaturesObj != null) {
+                Map<String, List<Map<String, Object>>> signatures = objectMapper.convertValue(
+                        signaturesObj,
+                        new TypeReference<Map<String, List<Map<String, Object>>>>() {}
+                );
+                // 만약 DTO 클래스가 setSignatures 메서드를 가지고 있으면 직접 설정
+                formDataDto.setSignatures(signatures);
             }
+        } catch (Exception e) {
+            log.warn("submitLeaveApplication: signatures 보존 중 예외 발생, 계속 진행합니다. error={}", e.getMessage());
+        }
 
-            // 폼 데이터에서 DTO 변환
-            LeaveApplicationUpdateFormRequestDto formDataDto = objectMapper.convertValue(formDataMap, LeaveApplicationUpdateFormRequestDto.class);
+        if (formDataDto == null) {
+            throw new IllegalArgumentException("휴가원 폼 데이터가 없습니다. 먼저 휴가 정보를 입력해주세요.");
+        }
 
-            // 폼 데이터가 없거나 부족한 경우 기본값 설정
-            if (formDataDto == null) {
-                throw new IllegalArgumentException("휴가원 폼 데이터가 없습니다. 먼저 휴가 정보를 입력해주세요.");
-            }
+        // 6-1. 휴가 종류 검증
+        if (formDataDto.getLeaveTypes() == null || formDataDto.getLeaveTypes().isEmpty()) {
+            throw new IllegalArgumentException("휴가 종류를 선택해주세요.");
+        }
 
-            // 필수 데이터 검증
-            if (formDataDto.getLeaveTypes() == null || formDataDto.getLeaveTypes().isEmpty()) {
-                throw new IllegalArgumentException("휴가 종류를 선택해주세요.");
-            }
-            // 연차휴가인지 확인
-            boolean isAnnualLeave = formDataDto.getLeaveTypes().contains("연차휴가");
-            // 연차휴가인 경우에만 totalDays 검증
-            if (isAnnualLeave) {
-                if (formDataDto.getTotalDays() == null || formDataDto.getTotalDays() <= 0) {
-                    throw new IllegalArgumentException("연차휴가 신청 시 휴가 기간을 입력해주세요.");
-                }
-            } else {
-                // 연차휴가가 아닌 경우, totalDays가 없거나 0이어도 허용
-                // 다만, 날짜는 여전히 필요할 수 있으므로 날짜 검증은 별도로 수행
-                boolean hasValidDates = false;
-
-                // 개별 기간 확인
-                if (formDataDto.getFlexiblePeriods() != null) {
-                    for (Map<String, String> period : formDataDto.getFlexiblePeriods()) {
-                        if (period.get("startDate") != null && !period.get("startDate").isEmpty() &&
-                                period.get("endDate") != null && !period.get("endDate").isEmpty()) {
-                            hasValidDates = true;
-                            break;
-                        }
-                    }
-                }
-
-                // 연속 기간 확인
-                if (!hasValidDates && formDataDto.getConsecutivePeriod() != null) {
-                    if (formDataDto.getConsecutivePeriod().get("startDate") != null &&
-                            !formDataDto.getConsecutivePeriod().get("startDate").isEmpty() &&
-                            formDataDto.getConsecutivePeriod().get("endDate") != null &&
-                            !formDataDto.getConsecutivePeriod().get("endDate").isEmpty()) {
-                        hasValidDates = true;
-                    }
-                }
-
-                if (!hasValidDates) {
-                    throw new IllegalArgumentException("휴가 기간을 입력해주세요.");
-                }
-            }
-
+        // 6-2. 연차휴가인 경우 일수 검증
+        boolean isAnnualLeave = formDataDto.getLeaveTypes().contains("연차휴가");
+        if (isAnnualLeave) {
             if (formDataDto.getTotalDays() == null || formDataDto.getTotalDays() <= 0) {
+                throw new IllegalArgumentException("연차휴가 신청 시 휴가 기간을 입력해주세요.");
+            }
+        } else {
+            // 연차가 아닌 경우 날짜 유효성 확인
+            boolean hasValidDates = false;
+
+            if (formDataDto.getFlexiblePeriods() != null) {
+                for (Map<String, String> period : formDataDto.getFlexiblePeriods()) {
+                    if (period.get("startDate") != null && !period.get("startDate").isEmpty() &&
+                            period.get("endDate") != null && !period.get("endDate").isEmpty()) {
+                        hasValidDates = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasValidDates && formDataDto.getConsecutivePeriod() != null) {
+                if (formDataDto.getConsecutivePeriod().get("startDate") != null &&
+                        !formDataDto.getConsecutivePeriod().get("startDate").isEmpty() &&
+                        formDataDto.getConsecutivePeriod().get("endDate") != null &&
+                        !formDataDto.getConsecutivePeriod().get("endDate").isEmpty()) {
+                    hasValidDates = true;
+                }
+            }
+
+            if (!hasValidDates) {
                 throw new IllegalArgumentException("휴가 기간을 입력해주세요.");
             }
+        }
 
-            // 신청자 서명 검증 - 서명 데이터에서 확인
-            boolean hasApplicantSignature = false;
-            if (formDataDto.getSignatures() != null && formDataDto.getSignatures().get("applicant") != null) {
-                List<Map<String, Object>> applicantSigs = formDataDto.getSignatures().get("applicant");
-                if (!applicantSigs.isEmpty()) {
-                    Map<String, Object> firstSig = applicantSigs.get(0);
-                    hasApplicantSignature = Boolean.TRUE.equals(firstSig.get("isSigned"));
-                }
+        // 6-3. 신청자 서명 검증
+        boolean hasApplicantSignature = false;
+        if (formDataDto.getSignatures() != null &&
+                formDataDto.getSignatures().get("applicant") != null) {
+            List<Map<String, Object>> applicantSigs = formDataDto.getSignatures().get("applicant");
+            if (!applicantSigs.isEmpty()) {
+                Map<String, Object> firstSig = applicantSigs.get(0);
+                hasApplicantSignature = Boolean.TRUE.equals(firstSig.get("isSigned"));
             }
+        }
 
-            if (!hasApplicantSignature) {
-                throw new IllegalStateException("신청자 서명이 완료되지 않았습니다. 서명을 먼저 진행해주세요.");
-            }
+        if (!hasApplicantSignature) {
+            throw new IllegalStateException("신청자 서명이 완료되지 않았습니다. 서명을 먼저 진행해주세요.");
+        }
 
-            // 폼 데이터 기반으로 휴가 정보 업데이트
-            updateApplicationFromDto(application, formDataDto);
+        // 7. 폼 데이터 기반으로 엔티티 업데이트
+        updateApplicationFromDto(application, formDataDto);
 
-            // 폼 데이터에서 applicationDate 값을 가져와 엔티티에 설정
-            if (formDataDto.getApplicationDate() != null) {
-                application.setApplicationDate(formDataDto.getApplicationDate());
-            }
+        // 8. 신청일 설정
+        if (formDataDto.getApplicationDate() != null) {
+            application.setApplicationDate(formDataDto.getApplicationDate());
+        } else {
+            application.setApplicationDate(LocalDate.now());
+        }
 
-            // 첫 승인 단계 및 승인자 설정 로직
-            String substituteId = application.getSubstituteId();
-            String initialStep = determineInitialApprovalStep(applicant.getJobLevel(), substituteId != null);
+        // 9. 신청자 서명 플래그 설정
+        application.setIsApplicantSigned(true);
 
-            application.setCurrentApprovalStep(initialStep);
-            application.setStatus(getPendingStatusForStep(initialStep));
+        // ✅ 10. 결재라인 기반 제출
+        ApprovalLine selectedLine = approvalLineRepository.findByIdWithSteps(approvalLineId)
+                .orElseThrow(() -> new EntityNotFoundException("선택된 결재라인을 찾을 수 없습니다."));
 
-            // 다음 승인자 ID 설정
-            String nextApproverId = findNextApproverId(initialStep, applicant, substituteId);
-            application.setCurrentApproverId(nextApproverId);
+        // 10-1. 결재 단계 복사 및 SUBSTITUTE 단계에 대직자 ID 주입
+        List<ApprovalStep> finalSteps = selectedLine.getSteps().stream()
+                .map(step -> {
+                    ApprovalStep processedStep = step.copy();
 
-            // 신청자가 서명했다는 플래그 설정
-            application.setIsApplicantSigned(true);
+                    if (processedStep.getApproverType() == ApproverType.SUBSTITUTE) {
+                        if (formDataDto.getSubstituteInfo() == null
+                                || formDataDto.getSubstituteInfo().getUserId() == null) {
+                            throw new IllegalArgumentException("대직자를 선택해주세요.");
+                        }
 
-            // 6) **서명 데이터 보존**: formDataDto.signatures 포함해 JSON 직렬화
+                        String substituteId = formDataDto.getSubstituteInfo().getUserId();
+
+                        UserEntity substitute = userRepository.findByUserId(substituteId)
+                                .orElseThrow(() -> new EntityNotFoundException(
+                                        "대직자를 찾을 수 없습니다: " + substituteId
+                                ));
+
+                        if (!"1".equals(substitute.getUseFlag())) {
+                            throw new IllegalStateException(
+                                    String.format("대직자 '%s'는 비활성 상태입니다.",
+                                            substitute.getUserName())
+                            );
+                        }
+
+                        processedStep.setApproverId(substituteId);
+                    }
+
+                    return processedStep;
+                })
+                .collect(Collectors.toList());
+
+        // 10-2. 결재 프로세스 시작
+        DocumentApprovalProcess process = approvalProcessService.startProcessWithSteps(
+                id,
+                DocumentType.LEAVE_APPLICATION,
+                selectedLine,
+                finalSteps,
+                userId
+        );
+
+        // 10-3. 첫 번째 결재자 ID 설정
+        ApprovalStep firstStep = finalSteps.stream()
+                .filter(s -> s.getStepOrder() == 1)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("결재라인에 유효한 첫 단계가 없습니다."));
+
+        application.setCurrentApproverId(firstStep.getApproverId());
+        application.setApprovalLine(process.getApprovalLine());
+        application.setStatus(LeaveApplicationStatus.PENDING); // ✅ 통합된 상태
+        application.setCurrentStepOrder(firstStep.getStepOrder()); // ✅ 추가
+        application.setCurrentApprovalStep(firstStep.getStepName());
+
+        // 11. 저장
+        try {
             String mergedJson = objectMapper.writeValueAsString(formDataDto);
             application.setFormDataJson(mergedJson);
-
         } catch (JsonProcessingException e) {
-            log.error("Failed to parse formDataJson for submission: {}", e.getMessage());
-            throw new IllegalArgumentException("제출용 폼 데이터 형식이 올바르지 않습니다.");
-        } catch (DateTimeParseException e) {
-            log.error("날짜 파싱 오류: 폼 데이터의 날짜 형식이 잘못되었습니다.", e);
-            throw new IllegalArgumentException("날짜 형식이 올바르지 않거나 비어있습니다. 날짜를 확인해주세요.", e);
+            log.error("formDataJson 직렬화 실패: {}", e.getMessage());
+            throw new RuntimeException("폼 데이터 저장에 실패했습니다.", e);
         }
-        return leaveApplicationRepository.save(application);
+
+        LeaveApplication savedApplication = leaveApplicationRepository.save(application);
+
+        log.info("휴가원 제출 완료: id={}, applicantId={}, status={}",
+                id, userId, savedApplication.getStatus());
+
+        return savedApplication;
     }
+
 
     /**
      * 전결 승인 처리 메서드 수정
@@ -724,7 +791,20 @@ public class LeaveApplicationService {
                 }
             }
         });
+        // ✅ 최종 승인 알림 전송 (신청자에게)
+        UserEntity applicant = saved.getApplicant();
+        Map<String, String> variables = new HashMap<>();
+        variables.put("applicantName", applicant.getUserName());
+        variables.put("leaveType", saved.getLeaveType().getDisplayName());
+        variables.put("leaveStartDate", saved.getStartDate().toString());
+        variables.put("leaveEndDate", saved.getEndDate().toString());
 
+        notificationService.sendNotification(
+                NotificationChannel.KAKAO,
+                applicant.getPhone(),
+                NotificationTemplate.LEAVE_APPROVAL_COMPLETE.getCode(), // 휴가 승인 완료 템플릿
+                variables
+        );
         return saved;
     }
 
@@ -876,157 +956,104 @@ public class LeaveApplicationService {
      * 휴가원 승인 시 기존 서명 데이터 보존
      */
     @Transactional
-    public LeaveApplication approveLeaveApplication(Long id, String approverId, String signatureDate) {
+    public LeaveApplication approveLeaveApplication(
+            Long id,
+            String approverId,
+            String signatureDate,
+            String signatureImageUrl // ✅ 새롭게 추가된 인수
+    ) {
         LeaveApplication application = getOrThrow(id);
 
-        // 2. 승인자 및 신청자 정보 조회
-        UserEntity approver = userRepository.findByUserId(approverId)
-                .orElseThrow(() -> new EntityNotFoundException("승인자 정보를 찾을 수 없습니다: " + approverId));
-        UserEntity applicant = userRepository.findByUserId(application.getApplicantId())
-                .orElseThrow(() -> new EntityNotFoundException("신청자 정보를 찾을 수 없습니다: " + application.getApplicantId()));
-
-        // 3. 승인 권한 확인 로직
-        boolean isAuthorized = false;
-
-        // case 1: 현재 지정된 승인자와 요청한 승인자가 일치하는 경우
-        // 이는 '개인 결재'를 의미합니다 (예: 대직자, 부서장 등)
-        if (approverId.equals(application.getCurrentApproverId())) {
-            isAuthorized = true;
-        }
-        // case 2: 그룹 승인 로직 (현재 승인자가 지정되지 않은 특정 단계)
-        // 예: 인사팀(AD)의 그룹 결재
-        else if (LeaveApplicationStatus.PENDING_HR_STAFF.equals(application.getStatus())) {
-            // 인사팀(AD) 부서 소속이며, 특정 권한을 가진 사용자인지 확인
-            // 예시: jobLevel 0 또는 1
-            Set<PermissionType> approverPermissions = permissionService.getAllUserPermissions(approverId);
-            boolean isHrGroupApprover = Arrays.asList("0", "1").contains(approver.getJobLevel()) &&
-                    approverPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
-            if (isHrGroupApprover) {
-                isAuthorized = true;
-            }
-        }
-        // case 3: (추가) 관리자(admin) 권한으로 강제 승인하는 로직
-        // 필요에 따라 추가할 수 있습니다. 예를 들어, is_admin 필드나 jobLevel이 "0"인 경우
-        else if ("0".equals(approver.getJobLevel()) || approver.isAdmin()) {
-            isAuthorized = true;
+        // ✅ 결재라인 사용 여부 확인
+        if (!application.isUsingApprovalLine()) {
+            // 하드코딩 방식 승인 API를 사용하여 결재라인을 사용하지 않는 경우이므로,
+            // 이 로직은 결재라인 기반 승인으로 모두 위임하는 것이 좋습니다.
+            // 현재 로직이 결재라인 기반으로 강제하고 있으므로 이 부분은 유지합니다.
+            throw new IllegalStateException("결재라인을 사용하지 않는 휴가원입니다.");
         }
 
-
-        if (!isAuthorized) {
-            throw new AccessDeniedException("승인 권한이 없거나 처리할 단계가 아닙니다.");
-        }
-
-        // **중요: 기존 서명 데이터를 보존하면서 현재 단계 서명 추가**
-        preserveAndUpdateSignatures(application, application.getCurrentApprovalStep(), approver, signatureDate);
-
-        // 현재 단계 승인 처리
-        completeCurrentApprovalStep(application, application.getCurrentApprovalStep());
-
-        // 다음 승인 단계 결정
-        String nextStep = determineNextApprovalStepAfter(
-                application.getCurrentApprovalStep(),
-                applicant.getJobLevel(),
-                application.getApplicantId(),
-                application.getCurrentApproverId()); // 이 인수는 사용되지 않을 수 있으므로 확인 필요
-
-        if (nextStep == null || "APPROVED".equals(nextStep)) {
-            // 최종 승인
-            application.setStatus(LeaveApplicationStatus.APPROVED);
-            application.setPrintable(true);
-            application.setCurrentApprovalStep("APPROVED");
-            application.setCurrentApproverId(null);
-        } else {
-            // 다음 단계로 전환
-            String nextApproverId = findNextApproverId(nextStep, applicant, application.getSubstituteId());
-            application.setCurrentApprovalStep(nextStep);
-            application.setStatus(getPendingStatusForStep(nextStep));
-            application.setCurrentApproverId(nextApproverId);
-        }
-
-        application.setUpdatedAt(LocalDateTime.now());
-        appendApprovalHistory(application, approver.getUserName(), approver.getJobLevel());
-
-        return leaveApplicationRepository.save(application);
+        // approveWithApprovalLine으로 위임 시 이미지 URL을 전달
+        // 이 메서드 시그니처도 확인하여 수정해야 합니다. (아래 2번 참조)
+        // 현재 approveWithApprovalLine에 comment는 빈 문자열로, isFinalApproval은 false로 전달하고 있습니다.
+        return approveWithApprovalLine(
+                id,
+                approverId,
+                "", // comment
+                signatureImageUrl, // ✅ signatureImageUrl 전달
+                false // isFinalApproval
+        );
     }
 
     /**
      * 기존 서명 데이터를 보존하면서 현재 단계의 서명을 추가/업데이트하는 메서드
      */
-    private void preserveAndUpdateSignatures(LeaveApplication application, String currentStep, UserEntity approver, String signatureDate) {
+    private void preserveAndUpdateSignatures(LeaveApplication application, String currentStep, UserEntity approver, String signatureDate, String signatureImageUrl) {
         try {
-            // 현재 formDataJson에서 서명 데이터 가져오기
-            Map<String, List<Map<String, Object>>> existingSignatures = new HashMap<>();
-
+            // 1. 전체 formDataJson을 LeaveApplicationUpdateFormRequestDto로 안전하게 읽어옵니다.
+            LeaveApplicationUpdateFormRequestDto formData;
             if (application.getFormDataJson() != null && !application.getFormDataJson().isEmpty()) {
-                Map<String, Object> formData = objectMapper.readValue(
-                        application.getFormDataJson(),
-                        new TypeReference<Map<String, Object>>() {}
-                );
+                // 이 DTO는 전체 JSON 구조를 반영해야 합니다.
+                formData = objectMapper.readValue(application.getFormDataJson(), LeaveApplicationUpdateFormRequestDto.class);
+            } else {
+                formData = new LeaveApplicationUpdateFormRequestDto();
+            }
 
-                Object signaturesObject = formData.get("signatures");
-                if (signaturesObject != null) {
-                    existingSignatures = objectMapper.convertValue(
-                            signaturesObject,
-                            new TypeReference<Map<String, List<Map<String, Object>>>>() {}
-                    );
-                }
+            if (formData.getSignatures() == null) {
+                formData.setSignatures(new HashMap<>());
             }
 
             // 현재 단계에 해당하는 서명 타입 결정
             String signatureType = getSignatureTypeFromStep(currentStep);
 
             if (signatureType != null) {
-                // 현재 단계의 서명이 이미 있는지 확인
-                List<Map<String, Object>> currentSignatures = existingSignatures.get(signatureType);
-                if (currentSignatures == null || currentSignatures.isEmpty() ||
-                        !Boolean.TRUE.equals(currentSignatures.get(0).get("isSigned"))) {
 
-                    // 서명이 없거나 완료되지 않은 경우에만 추가
-                    Map<String, Object> newSignature = new HashMap<>();
-                    newSignature.put("text", "승인");
-                    newSignature.put("imageUrl", approver.getSignimage());
-                    newSignature.put("isSigned", true);
-                    newSignature.put("signatureDate", toIsoString(signatureDate));
+                // 2. 새로운 서명 항목 생성
+                Map<String, Object> newSignature = new HashMap<>();
+                newSignature.put("text", "승인");
 
-                    // ★★★ 추가: 실제 서명자의 사용자 ID를 저장 ★★★
-                    newSignature.put("signerId", approver.getUserId());
-                    newSignature.put("signerName", approver.getUserName());
+                // Base64 포맷 보정 (이전 수정사항 유지)
+                String correctedImageUrl = signatureImageUrl;
+                if (correctedImageUrl != null && !correctedImageUrl.startsWith("data:")) {
+                    correctedImageUrl = "data:image/png;base64," + correctedImageUrl;
+                }
+                newSignature.put("imageUrl", correctedImageUrl);
+                newSignature.put("isSigned", true);
+                newSignature.put("signatureDate", toIsoString(signatureDate));
+                newSignature.put("signerId", approver.getUserId());
+                newSignature.put("signerName", approver.getUserName());
 
-                    // 기존 서명 리스트 존재하면 append, 아니면 새 리스트
-                    if (currentSignatures == null) {
-                        existingSignatures.put(signatureType, List.of(newSignature));
+                // 3. 서명 리스트 업데이트: 무조건 현재 단계의 서명을 덮어쓰거나 새로 추가합니다.
+                // DTO를 사용하면 기존 서명(previous approver)은 자동으로 보존됩니다.
+                List<Map<String, Object>> currentSignatures = formData.getSignatures()
+                        .getOrDefault(signatureType, new ArrayList<>());
+                boolean isAlreadySigned = !currentSignatures.isEmpty() && Boolean.TRUE.equals(currentSignatures.get(0).get("isSigned"));
+
+                // 현재 서명을 덮어씁니다 (최신 서명만 유효). 기존 리스트의 첫 번째 항목을 업데이트하는 것이 일반적입니다.
+                if (isAlreadySigned && (signatureImageUrl == null || signatureImageUrl.isEmpty())) {
+                    // 이미 서명된 데이터가 있고, 새로운 서명 이미지가 제공되지 않았으므로 (예: 단순 단계 이동 후 데이터 보존 호출),
+                    // JSON 데이터를 건드리지 않고 기존 서명 보존.
+                    log.info("기존 서명 데이터 보존: Step={}, SignatureType={}", currentStep, signatureType);
+                    // 다음 JSON 저장 로직으로 이동
+                } else {
+                    // 서명되지 않았거나 (최초 서명), 새로운 이미지 URL이 제공된 경우 (재서명) 업데이트 실행
+
+                    if (isAlreadySigned) {
+                        // 이미 서명되어 있었다면 (재서명): 기존 항목을 새로운 항목으로 대체
+                        currentSignatures.set(0, newSignature);
                     } else {
-                        // 이미 서명 항목이 있고 첫 항목이 true이면 추가하지 않는 기존 정책을 유지하려면 조건 사용
-                        boolean firstIsSigned = !currentSignatures.isEmpty() && Boolean.TRUE.equals(currentSignatures.get(0).get("isSigned"));
-                        if (!firstIsSigned) {
-                            List<Map<String, Object>> mut = new ArrayList<>(currentSignatures);
-                            mut.add(0, newSignature); // 최근 서명을 앞에 넣고 싶으면 0, 아니면 add(last)
-                            existingSignatures.put(signatureType, mut);
-                        }
+                        // 서명되지 않았다면 (최초 서명): 새로 추가
+                        currentSignatures.add(0, newSignature);
                     }
+
+                    formData.getSignatures().put(signatureType, currentSignatures);
                 }
             }
 
-            // 전체 formData 재구성 (기존 데이터 유지)
-            Map<String, Object> completeFormData;
-            if (application.getFormDataJson() != null && !application.getFormDataJson().isEmpty()) {
-                completeFormData = objectMapper.readValue(
-                        application.getFormDataJson(),
-                        new TypeReference<Map<String, Object>>() {}
-                );
-            } else {
-                completeFormData = new HashMap<>();
-            }
-
-            // 서명 데이터만 업데이트
-            completeFormData.put("signatures", existingSignatures);
-
-            // JSON으로 저장
-            application.setFormDataJson(objectMapper.writeValueAsString(completeFormData));
+            // 4. 전체 DTO를 JSON으로 저장 (다른 필드(signatures 외)도 모두 보존됨)
+            application.setFormDataJson(objectMapper.writeValueAsString(formData));
 
         } catch (Exception e) {
             log.error("서명 데이터 보존 중 오류 발생: {}", e.getMessage(), e);
-            // 서명 보존 실패해도 승인 프로세스는 계속 진행
         }
     }
 
@@ -1096,7 +1123,24 @@ public class LeaveApplicationService {
         application.setCurrentApprovalStep(null); // 반려 시 승인 단계 초기화
         application.setPrintable(false); // 반려 시 인쇄 불가
         application.setUpdatedAt(LocalDateTime.now());
-        return leaveApplicationRepository.save(application);
+        //return leaveApplicationRepository.save(application);
+        LeaveApplication savedApplication = leaveApplicationRepository.save(application);
+
+        // ✅ 반려 알림 전송 (신청자에게)
+        UserEntity applicant = savedApplication.getApplicant();
+        Map<String, String> variables = new HashMap<>();
+        variables.put("applicantName", applicant.getUserName());
+        variables.put("leaveType", savedApplication.getLeaveType().getDisplayName());
+        variables.put("rejectionReason", rejectionReason);
+
+        notificationService.sendNotification(
+                NotificationChannel.KAKAO,
+                applicant.getPhone(),
+                NotificationTemplate.LEAVE_REJECTION.getCode(), // 휴가 반려 템플릿
+                variables
+        );
+
+        return savedApplication;
     }
 
     /**
@@ -1150,19 +1194,24 @@ public class LeaveApplicationService {
      */
     @Transactional(readOnly = true)
     public Page<LeaveApplicationResponseDto> getMyApplications(String applicantId, Pageable pageable) {
-        Page<LeaveApplication> applicationsPage = leaveApplicationRepository.findByApplicant_UserId(applicantId, pageable);
+        // ✅ 수정: DRAFT, PENDING, REJECTED 상태만 조회하도록 변경
+        Set<LeaveApplicationStatus> myStatuses = Set.of(
+                LeaveApplicationStatus.DRAFT,
+                LeaveApplicationStatus.PENDING,
+                LeaveApplicationStatus.REJECTED
+        );
 
-        // 엔티티를 DTO로 직접 변환하며 모든 필드를 채워줍니다.
+        Page<LeaveApplication> applicationsPage = leaveApplicationRepository
+                .findByApplicantIdAndStatusIn(applicantId, myStatuses, pageable);
+
         return applicationsPage.map(app -> {
-            // LeaveApplicationResponseDto 객체를 직접 생성하고 필드를 설정합니다.
-            // (LeaveApplicationResponseDto에 적절한 생성자나 빌더가 있다면 그것을 사용해도 됩니다.)
             LeaveApplicationResponseDto dto = new LeaveApplicationResponseDto();
             dto.setId(app.getId());
             dto.setStartDate(app.getStartDate());
             dto.setEndDate(app.getEndDate());
             dto.setTotalDays(app.getTotalDays());
             dto.setStatus(app.getStatus());
-            // UserEntity가 null일 수 있는 상황을 안전하게 처리합니다.
+
             if (app.getApplicant() != null) {
                 dto.setApplicantName(app.getApplicant().getUserName());
             }
@@ -1170,11 +1219,8 @@ public class LeaveApplicationService {
                 dto.setSubstituteName(app.getSubstitute().getUserName());
             }
 
-            // *** 중요: 누락되었던 생성일과 수정일 필드를 DTO에 추가합니다. ***
             dto.setCreatedAt(app.getCreatedAt());
             dto.setUpdatedAt(app.getUpdatedAt());
-
-            // formDataJson도 필요하다면 여기서 설정할 수 있습니다.
             dto.setFormDataJson(app.getFormDataJson());
 
             return dto;
@@ -1192,32 +1238,16 @@ public class LeaveApplicationService {
 
         // 2. 승인 대기 상태 목록을 정의합니다.
         Set<LeaveApplicationStatus> pendingStatuses = Set.of(
-                LeaveApplicationStatus.PENDING_SUBSTITUTE,
-                LeaveApplicationStatus.PENDING_DEPT_HEAD,
-                LeaveApplicationStatus.PENDING_CENTER_DIRECTOR,
-                LeaveApplicationStatus.PENDING_HR_FINAL,
-                LeaveApplicationStatus.PENDING_ADMIN_DIRECTOR,
-                LeaveApplicationStatus.PENDING_CEO_DIRECTOR,
-                LeaveApplicationStatus.PENDING_HR_STAFF
+                LeaveApplicationStatus.PENDING
         );
 
         Page<LeaveApplication> page;
 
-        // 3. 사용자가 인사팀("AD") 소속인지에 따라 다른 쿼리 로직을 실행합니다.
-        Set<PermissionType> approverPermissions = permissionService.getAllUserPermissions(approverId);
-        if (approverPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)) {
-            page = leaveApplicationRepository.findByStatusIn(
-                    Set.of(LeaveApplicationStatus.PENDING_HR_STAFF, LeaveApplicationStatus.PENDING_HR_FINAL),
-                    pageable
-            );
-        } else {
-            page = leaveApplicationRepository.findByCurrentApproverIdAndStatusIn(
-                    approverId,
-                    pendingStatuses,
-                    pageable
-            );
-        }
-
+        page = leaveApplicationRepository.findByCurrentApproverIdAndStatusIn(
+                approverId,
+                pendingStatuses,
+                pageable
+        );
         // 4. 조회된 Page를 DTO로 변환하여 반환합니다.
         return page.map(app -> {
             UserEntity applicant = userService.getUserInfo(app.getApplicantId());
@@ -1364,237 +1394,6 @@ public class LeaveApplicationService {
     }
 
     /**
-     * 신청자의 JobLevel에 따라 초기 승인 단계 결정
-     */
-    private String determineInitialApprovalStep(String applicantJobLevel, boolean hasSubstitute) {
-        // jobLevel 0 (사원)
-        if ("0".equals(applicantJobLevel)) {
-            return hasSubstitute ? "SUBSTITUTE_APPROVAL" : "DEPARTMENT_HEAD_APPROVAL";
-        }
-
-        // jobLevel 1 (부서장) -> 진료센터장(2)으로 시작
-        if ("1".equals(applicantJobLevel)) {
-            return "HR_STAFF_APPROVAL";
-        }
-
-        // jobLevel 2 (진료센터장)
-        // -> 작성자(센터장) 본인에게 보내면 안 됨. 요구하신 흐름 대로 센터장은 자신의 단계 건너뛰고
-        // 바로 행정원장(4)로 요청하도록 변경.
-        if ("2".equals(applicantJobLevel)) {
-            return "ADMIN_DIRECTOR_APPROVAL";
-        }
-
-        // jobLevel 3 (원장)
-        // -> 원장은 센터장(2)에게 먼저 보내고, 그 다음 행정원장(4) 으로 진행
-        if ("3".equals(applicantJobLevel)) {
-            return "CENTER_DIRECTOR_APPROVAL";
-        }
-
-        // jobLevel 4 -> 행정원장 승인부터
-        if ("4".equals(applicantJobLevel)) {
-            return "ADMIN_DIRECTOR_APPROVAL";
-        }
-
-        // jobLevel 5 이상 -> 대표원장 승인부터
-        if ("5".equals(applicantJobLevel)) {
-            return "CEO_DIRECTOR_APPROVAL";
-        }
-
-        // 기본값
-        return "DEPARTMENT_HEAD_APPROVAL";
-    }
-
-    /**
-     * [신규] 다음 승인자의 ID를 찾는 중앙화된 메서드
-     */
-    private String findNextApproverId(String step, UserEntity applicant, String substituteId) {
-        String applicantId = applicant.getUserId();
-
-        switch (step) {
-            case "SUBSTITUTE_APPROVAL":
-                return substituteId;
-
-            case "DEPARTMENT_HEAD_APPROVAL": {
-                // 수정: useFlag = 1 조건 추가
-                Optional<UserEntity> deptHead = userRepository.findFirstByDeptCodeAndJobLevelAndUseFlag(applicant.getDeptCode(), "1", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (deptHead.isPresent()) return deptHead.get().getUserId();
-
-                // 폴백 로직도 useFlag 조건 추가
-                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(
-                                Arrays.asList("0", "1"), "AD", Role.ADMIN, "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (hr.isPresent()) return hr.get().getUserId();
-
-                throw new EntityNotFoundException("부서장 또는 인사 담당자를 찾을 수 없습니다.");
-            }
-
-            case "HR_STAFF_APPROVAL": {
-                // 1. 현재 신청자(applicantId)의 사용자 정보 조회
-                Optional<UserEntity> applicantUser = userRepository.findByUserId(applicantId);
-
-                // 2. 신청자가 인사팀 권한이 있는 소속인지 확인
-                boolean isApplicantInHR = false;
-                if (applicantUser.isPresent()) {
-                    Set<PermissionType> applicantPermissions = permissionService.getAllUserPermissions(applicantUser.get().getUserId());
-                    isApplicantInHR = applicantPermissions.contains(PermissionType.HR_LEAVE_APPLICATION);
-                }
-
-                // 3. 신청자가 인사팀 소속일 경우, 다음 승인자를 null로 설정하여 그룹 승인 대기로 표시
-                if (isApplicantInHR) {
-                    // 이 로직은 실제 DB에 휴가원 상태를 PENDING_HR_STAFF로 업데이트하고
-                    // currentApproverId를 null로 설정하는 비즈니스 로직을 호출해야 합니다.
-                    return null; // 승인자가 없음을 반환
-                }
-
-                // 4. 신청자가 인사팀이 아닐 경우, 기존 로직 유지 (단일 인사 담당자 지정)
-                List<String> hrJobLevels = Arrays.asList("0", "1");
-                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(hrJobLevels, "AD", Role.ADMIN, "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (hr.isPresent()) {
-                    return hr.get().getUserId();
-                }
-
-                // 5. 인사 담당자가 없을 경우, 센터장으로 폴백
-                Optional<UserEntity> center = userRepository.findFirstByJobLevelAndUseFlag("2", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (center.isPresent()) {
-                    return center.get().getUserId();
-                }
-
-                throw new EntityNotFoundException("인사 담당자 또는 진료센터장을 찾을 수 없습니다.");
-            }
-
-            case "CENTER_DIRECTOR_APPROVAL": {
-                // 수정: useFlag = 1 조건 추가
-                Optional<UserEntity> center = userRepository.findFirstByJobLevelAndUseFlag("2", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (center.isPresent()) return center.get().getUserId();
-
-                // 폴백도 useFlag 조건 추가
-                Optional<UserEntity> admin = userRepository.findFirstByJobLevelAndUseFlag("4", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (admin.isPresent()) return admin.get().getUserId();
-
-                // 최후 폴백도 useFlag 조건 추가
-                return userRepository.findFirstByJobLevelAndUseFlag("5", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId))
-                        .map(UserEntity::getUserId)
-                        .orElseThrow(() -> new EntityNotFoundException("승인자를 찾을 수 없습니다."));
-            }
-
-            case "HR_FINAL_APPROVAL": {
-                List<String> hrJobLevels = Arrays.asList("0", "1");
-                // 수정: useFlag = 1 조건 추가
-                Optional<UserEntity> hr = userRepository.findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(hrJobLevels, "AD", Role.ADMIN, "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (hr.isPresent()) {
-                    return hr.get().getUserId();
-                }
-
-                // 인사 담당자가 없을 경우, 행정원장으로 폴백 (useFlag = 1 조건 추가)
-                Optional<UserEntity> admin = userRepository.findFirstByJobLevelAndUseFlag("4", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (admin.isPresent()) return admin.get().getUserId();
-
-                throw new EntityNotFoundException("최종 인사 담당자를 찾을 수 없습니다.");
-            }
-
-            case "ADMIN_DIRECTOR_APPROVAL": {
-                // 수정: useFlag = 1 조건 추가
-                Optional<UserEntity> admin = userRepository.findFirstByJobLevelAndUseFlag("4", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId));
-                if (admin.isPresent()) return admin.get().getUserId();
-
-                // 폴백도 useFlag 조건 추가
-                return userRepository.findFirstByJobLevelAndUseFlag("5", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId))
-                        .map(UserEntity::getUserId)
-                        .orElseThrow(() -> new EntityNotFoundException("행정원장 또는 대표원장을 찾을 수 없습니다."));
-            }
-
-            case "CEO_DIRECTOR_APPROVAL": {
-                // 수정: useFlag = 1 조건 추가
-                return userRepository.findFirstByJobLevelAndUseFlag("5", "1")
-                        .filter(u -> !u.getUserId().equals(applicantId))
-                        .map(UserEntity::getUserId)
-                        .orElseThrow(() -> new EntityNotFoundException("대표원장을 찾을 수 없습니다."));
-            }
-
-            default:
-                throw new IllegalStateException("다음 승인자를 찾을 수 없는 단계입니다: " + step);
-        }
-    }
-
-    /**
-     * [신규] 특정 단계 이후의 다음 단계를 결정하는 메서드
-     */
-    private String determineNextApprovalStepAfter(String currentStep, String applicantJobLevel,   String applicantId,
-                                                  String currentApproverId) {
-        switch (currentStep) {
-            case "SUBSTITUTE_APPROVAL":
-                return "DEPARTMENT_HEAD_APPROVAL";
-            case "DEPARTMENT_HEAD_APPROVAL":
-                return "HR_STAFF_APPROVAL";
-            case "HR_STAFF_APPROVAL":
-                return "CENTER_DIRECTOR_APPROVAL";
-            case "CENTER_DIRECTOR_APPROVAL":
-                // 진료센터장(2) 본인 또는 그 이상 직급 신청 시 최종 승인
-                if (Integer.parseInt(applicantJobLevel) >= 2 && !applicantId.equals(currentApproverId)) {
-                    return "APPROVED";
-                }
-                return "HR_FINAL_APPROVAL";
-            case "HR_FINAL_APPROVAL": // 새로 추가
-                return "ADMIN_DIRECTOR_APPROVAL";
-            case "ADMIN_DIRECTOR_APPROVAL":
-                // 행정원장(4) 본인 또는 그 이상 직급 신청 시 최종 승인
-                if (Integer.parseInt(applicantJobLevel) >= 4 && !applicantId.equals(currentApproverId)) {
-                    return "APPROVED";
-                }
-                return "CEO_DIRECTOR_APPROVAL";
-            case "CEO_DIRECTOR_APPROVAL":
-                return "APPROVED";
-            default:
-                return null;
-        }
-    }
-
-    /**
-     * 현재 승인 단계에 따른 isApproved 필드 업데이트
-     */
-    private void completeCurrentApprovalStep(LeaveApplication application, String completedStep) {
-        switch (completedStep) {
-            case "SUBSTITUTE_APPROVAL":       application.setIsSubstituteApproved(true); break;
-            case "DEPARTMENT_HEAD_APPROVAL":  application.setIsDeptHeadApproved(true); break;
-            case "HR_STAFF_APPROVAL":         application.setIsHrStaffApproved(true); break;
-            case "CENTER_DIRECTOR_APPROVAL":  application.setIsCenterDirectorApproved(true); break;
-            case "HR_FINAL_APPROVAL":         application.setIsHrFinalApproved(true); break;
-            case "ADMIN_DIRECTOR_APPROVAL":   application.setIsAdminDirectorApproved(true); break;
-            case "CEO_DIRECTOR_APPROVAL":     application.setIsCeoDirectorApproved(true); break;
-            default:
-                log.warn("Unknown step when completing approval: {}", completedStep);
-                break;
-        }
-    }
-
-
-    /**
-     * 현재 승인 단계 문자열에 해당하는 LeaveApplicationStatus 반환
-     */
-    private LeaveApplicationStatus getPendingStatusForStep(String step) {
-        return switch (step) {
-            case "SUBSTITUTE_APPROVAL" -> LeaveApplicationStatus.PENDING_SUBSTITUTE;
-            case "DEPARTMENT_HEAD_APPROVAL" -> LeaveApplicationStatus.PENDING_DEPT_HEAD;
-            case "HR_STAFF_APPROVAL" -> LeaveApplicationStatus.PENDING_HR_STAFF;
-            case "CENTER_DIRECTOR_APPROVAL" -> LeaveApplicationStatus.PENDING_CENTER_DIRECTOR;
-            case "HR_FINAL_APPROVAL" -> LeaveApplicationStatus.PENDING_HR_FINAL;
-            case "ADMIN_DIRECTOR_APPROVAL" -> LeaveApplicationStatus.PENDING_ADMIN_DIRECTOR;
-            case "CEO_DIRECTOR_APPROVAL" -> LeaveApplicationStatus.PENDING_CEO_DIRECTOR;
-            default -> LeaveApplicationStatus.DRAFT; // 적절한 기본값 또는 예외
-        };
-    }
-
-    /**
      * 휴가원 조회 권한 확인
      */
     private boolean canView(UserEntity viewer, LeaveApplication application, UserEntity applicant) {
@@ -1721,5 +1520,257 @@ public class LeaveApplicationService {
 
             return LeaveApplicationResponseDto.fromEntity(app, applicant, substitute);
         });
+    }
+
+    @Transactional
+    public LeaveApplication approveWithApprovalLine(
+            Long id,
+            String approverId,
+            String comment,
+            String signatureImageUrl,
+            boolean isFinalApproval
+    ) {
+        LeaveApplication application = getOrThrow(id);
+
+        if (!application.isUsingApprovalLine()) {
+            throw new IllegalStateException("결재라인을 사용하지 않는 휴가원입니다.");
+        }
+
+        DocumentApprovalProcess process = processRepository
+                .findByDocumentIdAndDocumentType(id, DocumentType.LEAVE_APPLICATION)
+                .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
+
+        String currentStepBeforeApproval = application.getCurrentApprovalStep();
+        Integer currentStepOrderBeforeApproval = application.getCurrentStepOrder();
+
+        // 승인 처리
+        approvalProcessService.approveStep(
+                process.getId(),
+                approverId,
+                comment,
+                signatureImageUrl,
+                isFinalApproval
+        );
+
+        // 전결 처리 로직
+        if (isFinalApproval) {
+            application.setIsFinalApproved(true);
+            application.setFinalApprovalStep(currentStepBeforeApproval);
+            application.setFinalApproverId(approverId);
+            application.setFinalApprovalDate(LocalDateTime.now());
+
+            List<String> remainingSteps = approvalProcessService.getRemainingSteps(
+                    process.getId(),
+                    currentStepOrderBeforeApproval
+            );
+
+            for (String step : remainingSteps) {
+                String signatureType = getSignatureTypeFromStep(step);
+                if (signatureType != null) {
+                    updateSignatureForFinalApproval(
+                            application,
+                            signatureType,
+                            "전결처리!",
+                            LocalDateTime.now().toString(),
+                            approverId
+                    );
+                }
+            }
+        }
+
+        // 프로세스 재조회
+        process = processRepository.findById(process.getId()).orElseThrow();
+
+        // ✅ 수정: 최종 승인 완료 시 연차 차감
+        if (process.getStatus() == ApprovalProcessStatus.APPROVED) {
+            application.setStatus(LeaveApplicationStatus.APPROVED);
+            application.setPrintable(true);
+            application.setUpdatedAt(LocalDateTime.now());
+
+            // ✅ 먼저 application 저장 (flush하여 DB에 반영)
+            LeaveApplication savedApp = leaveApplicationRepository.saveAndFlush(application);
+
+            // ✅ 연차 차감을 같은 트랜잭션 내에서 실행 (REQUIRES_NEW 제거)
+            if (savedApp.getTotalDays() != null && savedApp.getTotalDays() > 0) {
+                try {
+                    deductVacationDaysInSameTransaction(savedApp.getApplicantId(), savedApp.getTotalDays());
+                } catch (Exception e) {
+                    log.error("연차 차감 실패: {}", e.getMessage(), e);
+                    throw new IllegalStateException("연차 차감 실패: " + e.getMessage());
+                }
+            }
+
+            return savedApp;
+        }
+
+        application.setUpdatedAt(LocalDateTime.now());
+        return leaveApplicationRepository.save(application);
+    }
+
+    /**
+     * ✅ 같은 트랜잭션 내에서 연차 차감 (REQUIRES_NEW 제거)
+     */
+    private void deductVacationDaysInSameTransaction(String applicantId, Double days) {
+        // ✅ 비관적 락을 사용하여 UserEntity 조회
+        UserEntity applicant = userRepository.findByUserIdWithLock(applicantId)
+                .orElseThrow(() -> new EntityNotFoundException("신청자를 찾을 수 없습니다."));
+
+        try {
+            applicant.useVacationDays(days);
+            userRepository.save(applicant);
+            log.info("연차 차감 완료: userId={}, totalDays={}, remaining={}",
+                    applicant.getUserId(),
+                    days,
+                    applicant.getRemainingAnnualLeave());
+        } catch (IllegalStateException e) {
+            log.error("연차 차감 실패: {}", e.getMessage());
+            throw new IllegalStateException("연차 차감 실패: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 전결 처리 시 잔여 단계의 서명 필드를 강제로 업데이트합니다.
+     */
+    private void updateSignatureForFinalApproval(
+            LeaveApplication application,
+            String signatureType,
+            String text,
+            String signatureDate,
+            String finalApproverId  // ✅ 추가: 전결 처리자 ID
+    ) {
+        try {
+            Map<String, Object> formData;
+            if (application.getFormDataJson() != null && !application.getFormDataJson().isEmpty()) {
+                formData = objectMapper.readValue(
+                        application.getFormDataJson(),
+                        new TypeReference<Map<String, Object>>() {}
+                );
+            } else {
+                formData = new HashMap<>();
+            }
+
+            // signatures 맵 가져오기 또는 생성
+            Map<String, List<Map<String, Object>>> signatures =
+                    (Map<String, List<Map<String, Object>>>) formData.get("signatures");
+            if (signatures == null) {
+                signatures = new HashMap<>();
+            }
+
+            // ✅ 전결 처리 서명 데이터 생성
+            Map<String, Object> newSignature = new HashMap<>();
+            newSignature.put("text", text); // "전결처리!"
+            newSignature.put("imageUrl", null);
+            newSignature.put("isSigned", false);  // ✅ 실제 서명이 아니므로 false
+            newSignature.put("isSkipped", true);   // ✅ 건너뛴 단계
+            newSignature.put("isFinalApproval", true);  // ✅ 전결로 처리됨
+            newSignature.put("signatureDate", toIsoString(signatureDate));
+            newSignature.put("skippedBy", finalApproverId);  // ✅ 전결 처리한 사람
+            newSignature.put("skippedReason", "전결 승인으로 생략됨");
+
+            // ✅ 전결 처리자 정보 추가
+            try {
+                UserEntity finalApprover = userRepository.findByUserId(finalApproverId)
+                        .orElse(null);
+                if (finalApprover != null) {
+                    newSignature.put("skippedByName", finalApprover.getUserName());
+                    newSignature.put("signerId", finalApproverId);
+                    newSignature.put("signerName", finalApprover.getUserName());
+                } else {
+                    newSignature.put("signerId", "system");
+                    newSignature.put("signerName", "시스템");
+                }
+            } catch (Exception e) {
+                log.warn("전결 처리자 정보 조회 실패", e);
+                newSignature.put("signerId", "system");
+                newSignature.put("signerName", "시스템");
+            }
+
+            // ✅ 서명 리스트 생성 및 저장
+            List<Map<String, Object>> signatureList = new ArrayList<>();
+            signatureList.add(newSignature);
+            signatures.put(signatureType, signatureList);
+
+            // ✅ formData에 signatures 저장
+            formData.put("signatures", signatures);
+
+            // ✅ JSON 저장
+            application.setFormDataJson(objectMapper.writeValueAsString(formData));
+
+        } catch (JsonProcessingException e) {
+            log.error("전결처리 서명 업데이트 실패: applicationId={}, signatureType={}",
+                    application.getId(), signatureType, e);
+        }
+    }
+
+    /**
+     * ✅ 새 메서드: 결재라인 기반 반려 처리
+     */
+    @Transactional
+    public LeaveApplication rejectWithApprovalLine(
+            Long id,
+            String approverId,
+            String rejectionReason
+    ) {
+        LeaveApplication application = getOrThrow(id);
+
+        if (!application.isUsingApprovalLine()) {
+            throw new IllegalStateException("결재라인을 사용하지 않는 휴가원입니다.");
+        }
+
+        DocumentApprovalProcess process = processRepository
+                .findByDocumentIdAndDocumentType(id, DocumentType.LEAVE_APPLICATION)
+                .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
+
+        approvalProcessService.rejectStep(process.getId(), approverId, rejectionReason);
+
+        application.setStatus(LeaveApplicationStatus.REJECTED);
+        application.setRejectionReason(rejectionReason);
+        application.setPrintable(false);
+        application.setUpdatedAt(LocalDateTime.now());
+
+        return leaveApplicationRepository.save(application);
+    }
+
+    @Transactional
+    public LeaveApplication cancelApprovedLeaveApplication(
+            Long applicationId,
+            String requesterId,
+            String cancellationReason
+    ) {
+        // ✅ 권한 확인: HR_LEAVE_APPLICATION 권한만 체크
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(requesterId);
+        if (!permissions.contains(PermissionType.HR_LEAVE_APPLICATION)) {
+            throw new AccessDeniedException("완료된 휴가원을 취소할 권한이 없습니다.");
+        }
+
+        // ✅ 휴가원 조회 및 상태 확인
+        LeaveApplication application = leaveApplicationRepository.findById(applicationId)
+                .orElseThrow(() -> new EntityNotFoundException("휴가원을 찾을 수 없습니다."));
+
+        if (application.getStatus() != LeaveApplicationStatus.APPROVED) {
+            throw new IllegalStateException("승인 완료된 휴가원만 취소할 수 있습니다.");
+        }
+
+        // ✅ 휴가 일수 복구
+        if (application.getTotalDays() != null && application.getTotalDays() > 0) {
+            UserEntity applicant = userRepository.findByUserIdWithLock(application.getApplicantId())
+                    .orElseThrow(() -> new EntityNotFoundException("신청자를 찾을 수 없습니다."));
+
+            try {
+                applicant.restoreVacationDays(application.getTotalDays());
+                userRepository.save(applicant);
+                log.info("연차 복구 완료: userId={}, days={}", applicant.getUserId(), application.getTotalDays());
+            } catch (Exception e) {
+                log.error("연차 복구 실패", e);
+                throw new IllegalStateException("연차 복구 중 오류가 발생했습니다.");
+            }
+        }
+
+        // ✅ 상태 변경
+        application.setStatus(LeaveApplicationStatus.REJECTED);
+        application.setRejectionReason("관리자 취소: " + cancellationReason);
+        application.setPrintable(false);
+
+        return leaveApplicationRepository.save(application);
     }
 }

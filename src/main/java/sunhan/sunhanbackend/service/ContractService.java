@@ -18,10 +18,15 @@ import sunhan.sunhanbackend.entity.mysql.EmploymentContract;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.ContractStatus;
 import sunhan.sunhanbackend.enums.ContractType;
+import sunhan.sunhanbackend.enums.NotificationChannel;
 import sunhan.sunhanbackend.repository.mysql.EmploymentContractRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
+import sunhan.sunhanbackend.template.NotificationTemplate;
 
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -37,6 +42,7 @@ public class ContractService {
     private final FormService formService;
     private final UserService userService;
     private final PdfGenerationService pdfGenerationService; // 비동기 서비스 주입
+    private final NotificationService notificationService;
 
     // 기존 메서드 - 모든 계약서 조회 (하위 호환성 유지)
     public Page<ContractResponseDto> getContracts(String userId, boolean isAdmin, Pageable pageable) {
@@ -200,7 +206,30 @@ public class ContractService {
             throw new IllegalStateException("초안 또는 반려 상태에서만 전송할 수 있습니다.");
         }
         c.setStatus(ContractStatus.SENT_TO_EMPLOYEE);
-        return toDto(repo.save(c));
+
+        //return toDto(repo.save(c));
+        EmploymentContract savedContract = repo.save(c);
+
+        // ✅ 근로계약서 서명 요청 알림 전송
+        UserEntity employee = savedContract.getEmployee();
+        UserEntity creator = savedContract.getCreator();
+        Map<String, String> variables = new HashMap<>();
+        variables.put("employeeName", employee.getUserName());
+        variables.put("contractType", savedContract.getContractType().getDisplayName());
+        variables.put("department", employee.getDeptCode());
+        variables.put("position", employee.getJobLevel());
+        variables.put("creatorName", creator.getUserName());
+        variables.put("startDate", savedContract.getCreatedAt().toString());
+        variables.put("signDeadline", "서명 기한 정보"); // 기한 정보는 별도로 관리 필요
+
+        notificationService.sendNotification(
+                NotificationChannel.KAKAO,
+                employee.getPhone(),
+                NotificationTemplate.CONTRACT_SIGN_REQUEST.getCode(),
+                variables
+        );
+
+        return toDto(savedContract);
     }
 
     /**
@@ -228,12 +257,39 @@ public class ContractService {
         c.setPdfUrl(pdfUrl);
         c.setPrintable(true);
 
-        // 상태를 '완료'로 변경
         c.setStatus(ContractStatus.COMPLETED);
 
-        log.info("계약서 ID {} 완료 처리 및 PDF 생성 완료", id);
+        //return toDto(repo.save(c));
+        EmploymentContract savedContract = repo.save(c);
 
-        return toDto(repo.save(c)); // PDF URL이 포함된 상태로 응답
+        // ✅ 근로계약서 서명 완료 알림 전송 (작성자 & 직원 모두에게)
+        UserEntity creator = savedContract.getCreator();
+        UserEntity employee = savedContract.getEmployee();
+        Map<String, String> variables = new HashMap<>();
+        variables.put("employeeName", employee.getUserName());
+        variables.put("contractType", savedContract.getContractType().getDisplayName());
+        variables.put("department", employee.getDeptCode());
+        variables.put("position", employee.getJobLevel());
+        variables.put("startDate", savedContract.getCreatedAt().toString());
+        variables.put("signCompleteDate", LocalDate.now().toString());
+
+        // 작성자에게 알림 전송
+        notificationService.sendNotification(
+                NotificationChannel.KAKAO,
+                creator.getPhone(),
+                NotificationTemplate.CONTRACT_SIGN_COMPLETE.getCode(),
+                variables
+        );
+        // 서명자에게 알림 전송
+        notificationService.sendNotification(
+                NotificationChannel.KAKAO,
+                employee.getPhone(),
+                NotificationTemplate.CONTRACT_SIGN_COMPLETE.getCode(),
+                variables
+        );
+
+        log.info("계약서 ID {} 완료 처리 및 PDF 생성 완료", id);
+        return toDto(savedContract);
     }
 
     /**
@@ -286,9 +342,30 @@ public class ContractService {
         // 반려 사유 저장 및 상태 변경
         c.setStatus(ContractStatus.RETURNED_TO_ADMIN);
         c.setRejectionReason(reason.trim());
+        log.info("계약서 ID {} 반려 처리됨, 사유: {}", id, reason);
+        //return toDto(repo.save(c));
+        EmploymentContract savedContract = repo.save(c);
+
+        // ✅ 근로계약서 반려 알림 전송 (작성자에게)
+        UserEntity creator = savedContract.getCreator();
+        UserEntity employee = savedContract.getEmployee();
+        Map<String, String> variables = new HashMap<>();
+        variables.put("employeeName", employee.getUserName());
+        variables.put("contractType", savedContract.getContractType().getDisplayName());
+        variables.put("rejectionReason", reason.trim());
+        variables.put("rejectorName", employee.getUserName()); // 반려자는 직원 본인
+        variables.put("rejectionDateTime", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
+
+        // 작성자(관리자)에게 알림 전송
+        notificationService.sendNotification(
+                NotificationChannel.KAKAO,
+                creator.getPhone(),
+                NotificationTemplate.CONTRACT_REJECTION.getCode(),
+                variables
+        );
 
         log.info("계약서 ID {} 반려 처리됨, 사유: {}", id, reason);
-        return toDto(repo.save(c));
+        return toDto(savedContract);
     }
 
     public ContractResponseDto approve(Long id, String empId) {

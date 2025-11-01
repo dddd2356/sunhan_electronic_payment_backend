@@ -21,6 +21,7 @@ import sunhan.sunhanbackend.dto.response.AttachmentResponseDto;
 import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.service.LeaveApplicationService;
 import sunhan.sunhanbackend.service.PermissionService;
@@ -40,6 +41,7 @@ public class LeaveApplicationController {
     private final UserService userService;
     private final ObjectMapper objectMapper; // ObjectMapper 주입
     private final PermissionService permissionService;
+
 
     /**
      * 내 휴가원 목록 조회
@@ -163,26 +165,63 @@ public class LeaveApplicationController {
         return ResponseEntity.status(HttpStatus.CREATED).body(LeaveApplicationResponseDto.fromEntity(application, applicant, null));
     }
 
+    /**
+     * 휴가원 제출 - 결재라인 포함 버전
+     */
     @PostMapping("/{id}/submit")
-    public ResponseEntity<?> submitLeaveApplication(@PathVariable Long id, Authentication auth) {
+    public ResponseEntity<?> submitLeaveApplication(
+            @PathVariable Long id,
+            @RequestBody(required = false) Map<String, Object> requestBody,
+            Authentication auth) {
         try {
             String userId = auth.getName();
-            LeaveApplication submittedApplication = leaveApplicationService.submitLeaveApplication(id, userId);
+
+            // 결재라인 ID 추출 (선택적)
+            Long approvalLineId = null;
+            if (requestBody != null && requestBody.containsKey("approvalLineId")) {
+                Object lineIdObj = requestBody.get("approvalLineId");
+                if (lineIdObj != null) {
+                    if (lineIdObj instanceof Number) {
+                        approvalLineId = ((Number) lineIdObj).longValue();
+                    } else if (lineIdObj instanceof String) {
+                        try {
+                            approvalLineId = Long.parseLong((String) lineIdObj);
+                        } catch (NumberFormatException e) {
+                            log.warn("Invalid approvalLineId format: {}", lineIdObj);
+                        }
+                    }
+                }
+            }
+
+            // 서비스 호출
+            LeaveApplication submittedApplication = leaveApplicationService.submitLeaveApplication(
+                    id,
+                    approvalLineId,
+                    userId
+            );
 
             UserEntity applicant = userService.getUserInfo(submittedApplication.getApplicantId());
             UserEntity substitute = (submittedApplication.getSubstituteId() != null) ?
                     userService.getUserInfo(submittedApplication.getSubstituteId()) : null;
 
-            return ResponseEntity.ok(LeaveApplicationResponseDto.fromEntity(submittedApplication, applicant, substitute));
+            return ResponseEntity.ok(LeaveApplicationResponseDto.fromEntity(
+                    submittedApplication,
+                    applicant,
+                    substitute
+            ));
         } catch (EntityNotFoundException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "제출할 휴가원을 찾을 수 없거나 권한이 없습니다."));
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "제출할 휴가원을 찾을 수 없거나 권한이 없습니다."));
         } catch (IllegalStateException | AccessDeniedException e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", e.getMessage()));
-        } catch (IllegalArgumentException e) { // 추가
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", e.getMessage()));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
             log.error("휴가원 제출 실패: id={}", id, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "제출 중 오류가 발생했습니다."));
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "제출 중 오류가 발생했습니다."));
         }
     }
 
@@ -193,8 +232,9 @@ public class LeaveApplicationController {
     public ResponseEntity<?> approveLeaveApplication(@PathVariable Long id,  @RequestBody Map<String, String> requestBody, Authentication auth) {
         String approverId = auth.getName();
         String signatureDate = requestBody.get("signatureDate");
+        String signatureImageUrl = requestBody.get("signatureImageUrl");
         try {
-            LeaveApplication application = leaveApplicationService.approveLeaveApplication(id, approverId, signatureDate);
+            LeaveApplication application = leaveApplicationService.approveLeaveApplication(id, approverId, signatureDate, signatureImageUrl);
             UserEntity applicant = userService.getUserInfo(application.getApplicantId());
             UserEntity substitute = (application.getSubstituteId() != null) ?
                     userService.getUserInfo(application.getSubstituteId()) : null;
@@ -484,11 +524,45 @@ public class LeaveApplicationController {
             Authentication auth) {
 
         String userId = auth.getName();
+        LeaveApplication application = leaveApplicationService.getLeaveApplicationEntity(id);
+
+        // ✅ 현재 사용자가 서명할 권한이 있는지 확인
+        if (!canSignAtPosition(id, userId, signatureType)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(null);
+        }
+
+        // ✅ 이미 다른 사용자가 서명한 경우 덮어쓰기 방지
+        try {
+            Map<String, Object> formData = objectMapper.readValue(
+                    application.getFormDataJson(),
+                    new TypeReference<Map<String, Object>>() {}
+            );
+
+            Map<String, List<Map<String, Object>>> signatures =
+                    (Map<String, List<Map<String, Object>>>) formData.get("signatures");
+
+            if (signatures != null && signatures.containsKey(signatureType)) {
+                List<Map<String, Object>> existingSigs = signatures.get(signatureType);
+                if (existingSigs != null && !existingSigs.isEmpty()) {
+                    Map<String, Object> existingSig = existingSigs.get(0);
+                    Boolean isSigned = (Boolean) existingSig.get("isSigned");
+                    String existingSignerId = (String) existingSig.get("signerId");
+
+                    // ✅ 이미 다른 사람이 서명했으면 거부
+                    if (Boolean.TRUE.equals(isSigned) && existingSignerId != null && !existingSignerId.equals(userId)) {
+                        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                .body(null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("서명 검증 실패", e);
+        }
 
         // null 또는 서명 취소 요청 처리
         if (signatureData == null || signatureData.isEmpty() ||
                 signatureData.get("imageUrl") == null) {
-            // 서명 취소 처리
             Map<String, Object> cancelSignatureData = new HashMap<>();
             cancelSignatureData.put("text", "");
             cancelSignatureData.put("imageUrl", null);
@@ -496,22 +570,13 @@ public class LeaveApplicationController {
             signatureData = cancelSignatureData;
         }
 
-        // 권한 체크
-        if (!canSignAtPosition(id, userId, signatureType)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        }
-
         try {
-            // 서비스에 서명 로직 위임
             LeaveApplication updated = leaveApplicationService.updateSignature(id, userId, signatureType, signatureData);
-
-            // DTO로 변환
             UserEntity applicant = userService.getUserInfo(updated.getApplicantId());
             UserEntity substitute = (updated.getSubstituteId() != null)
                     ? userService.getUserInfo(updated.getSubstituteId())
                     : null;
             LeaveApplicationResponseDto dto = LeaveApplicationResponseDto.fromEntity(updated, applicant, substitute);
-
             return ResponseEntity.ok(dto);
         } catch (Exception e) {
             log.error("서명 업데이트 실패: id={}, signatureType={}, userId={}", id, signatureType, userId, e);
@@ -579,42 +644,23 @@ public class LeaveApplicationController {
             LeaveApplication application = leaveApplicationService.getLeaveApplicationEntity(applicationId);
             UserEntity user = userService.getUserInfo(userId);
 
-            switch (signatureType) {
-                case "applicant":
-                    // 신청자 본인만 서명 가능
-                    return userId.equals(application.getApplicantId());
-
-                case "substitute":
-                    // 대직자만 서명 가능
-                    return userId.equals(application.getSubstituteId());
-
-                case "departmentHead":
-                    // 부서장 권한 체크 (jobLevel 1 이상이면서 같은 부서)
-                    if (user.getJobLevel() == null) return false;
-                    int jobLevel = Integer.parseInt(user.getJobLevel());
-                    return jobLevel >= 1 && canManageDepartment(userId, application.getApplicantId());
-
-                case "hrStaff":
-                    Set<PermissionType> userPermissions = permissionService.getAllUserPermissions(userId);
-                    return "0".equals(user.getJobLevel())
-                            && userPermissions.contains(PermissionType.HR_LEAVE_APPLICATION)
-                            && user.isAdmin();
-                case "centerDirector":
-                    // 센터장 권한 체크 (jobLevel 2 이상)
-                    return user.getJobLevel() != null && Integer.parseInt(user.getJobLevel()) >= 2;
-
-                case "adminDirector":
-                    // 행정원장 권한 체크 (jobLevel 4 이상)
-                    return user.getJobLevel() != null && Integer.parseInt(user.getJobLevel()) >= 4;
-
-                case "ceoDirector":
-                    // 대표원장 권한 체크 (jobLevel 5 이상)
-                    return user.getJobLevel() != null && Integer.parseInt(user.getJobLevel()) >= 5;
-
-                default:
-                    return false;
+            // ✅ 신청자 서명은 항상 DRAFT 상태에서만 가능 (결재라인과 무관)
+            if ("applicant".equals(signatureType)) {
+                return userId.equals(application.getApplicantId()) &&
+                        application.getStatus() == LeaveApplicationStatus.DRAFT;
             }
 
+            // ✅ DRAFT 상태에서는 신청자 외 다른 서명 불가
+            if (application.getStatus() == LeaveApplicationStatus.DRAFT) {
+                return false;
+            }
+
+            // ✅ 결재라인 기반인 경우 currentApproverId로 판단
+            if (application.isUsingApprovalLine()) {
+                return userId.equals(application.getCurrentApproverId());
+            }
+
+            return false;
         } catch (Exception e) {
             log.error("서명 권한 체크 실패: applicationId={}, userId={}, signatureType={}",
                     applicationId, userId, signatureType, e);
@@ -757,4 +803,102 @@ public class LeaveApplicationController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
+
+    /**
+     * ✅ 결재라인 기반 승인
+     */
+    @PutMapping("/{id}/approve-with-line")
+    public ResponseEntity<?> approveWithApprovalLine(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> request,
+            Authentication auth
+    ) {
+        try {
+            String approverId = auth.getName();
+            String comment = (String) request.getOrDefault("comment", "");
+            String signatureImageUrl = (String) request.get("signatureImageUrl");
+            boolean isFinalApproval = Boolean.TRUE.equals(request.get("isFinalApproval"));
+
+            LeaveApplication application = leaveApplicationService.approveWithApprovalLine(
+                    id,
+                    approverId,
+                    comment,
+                    signatureImageUrl,
+                    isFinalApproval
+            );
+
+            return ResponseEntity.ok(application);
+        } catch (Exception e) {
+            log.error("결재라인 승인 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * ✅ 결재라인 기반 반려
+     */
+    @PutMapping("/{id}/reject-with-line")
+    public ResponseEntity<?> rejectWithApprovalLine(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> request,
+            Authentication auth
+    ) {
+        try {
+            String approverId = auth.getName();
+            String rejectionReason = request.get("rejectionReason");
+
+            if (rejectionReason == null || rejectionReason.trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "반려 사유를 입력해주세요."));
+            }
+
+            LeaveApplication application = leaveApplicationService.rejectWithApprovalLine(
+                    id,
+                    approverId,
+                    rejectionReason
+            );
+
+            return ResponseEntity.ok(application);
+        } catch (Exception e) {
+            log.error("결재라인 반려 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+    /**
+     * ✅ 완료된 휴가원 취소 (인사권한자 전용)
+     */
+    @PutMapping("/{id}/cancel-approved")
+    public ResponseEntity<?> cancelApprovedLeaveApplication(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> request,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+            String cancellationReason = request.get("cancellationReason");
+
+            if (cancellationReason == null || cancellationReason.trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "취소 사유를 입력해주세요."));
+            }
+
+            LeaveApplication application = leaveApplicationService.cancelApprovedLeaveApplication(
+                    id,
+                    userId,
+                    cancellationReason
+            );
+
+            return ResponseEntity.ok(application);
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("완료된 휴가원 취소 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
 }

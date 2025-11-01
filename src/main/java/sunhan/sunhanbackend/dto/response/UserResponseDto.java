@@ -19,4 +19,6 @@ public class UserResponseDto {
     private String role;
     private List<String> permissions; // UserPermissionEntity + DeptPermissionEntity
     private byte[] signimage;
+    private Boolean privacyConsent;
+    private Boolean notificationConsent;
 }

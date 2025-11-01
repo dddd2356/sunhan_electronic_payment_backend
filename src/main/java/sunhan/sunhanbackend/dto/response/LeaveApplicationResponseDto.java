@@ -7,6 +7,7 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import sunhan.sunhanbackend.dto.approval.ApprovalLineResponseDto;
 import sunhan.sunhanbackend.dto.request.LeaveSummaryDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
@@ -37,6 +38,7 @@ public class LeaveApplicationResponseDto {
     private String substitutePosition;
 
     private String currentApproverId;
+    private Integer currentStepOrder;
     private Boolean isFinalApproved;
     private String finalApproverId;
     private LocalDateTime finalApprovalDate;
@@ -71,6 +73,7 @@ public class LeaveApplicationResponseDto {
     private String pdfUrl;
     private boolean printable;
     private List<AttachmentResponseDto> attachments;
+    private ApprovalLineResponseDto approvalLine;
 
     public static LeaveApplicationResponseDto fromEntity(
             LeaveApplication app,
@@ -108,6 +111,13 @@ public class LeaveApplicationResponseDto {
         dto.setStatus(app.getStatus());
         dto.setCurrentApprovalStep(app.getCurrentApprovalStep());
         dto.setCurrentApproverId(app.getCurrentApproverId());
+        dto.setCurrentStepOrder(app.getCurrentStepOrder());
+
+        // ✅ 결재라인 정보 매핑
+        if (app.getApprovalLine() != null) {
+            dto.setApprovalLine(ApprovalLineResponseDto.fromEntity(app.getApprovalLine()));
+        }
+
         dto.setRejectionReason(app.getRejectionReason());
         dto.setFormDataJson(app.getFormDataJson());
         dto.setPdfUrl(app.getPdfUrl());
@@ -179,7 +189,7 @@ public class LeaveApplicationResponseDto {
 
         dto.setCreatedAt(app.getCreatedAt());
         dto.setUpdatedAt(app.getUpdatedAt());
-
+        dto.setCurrentStepOrder(app.getCurrentStepOrder());
         return dto;
     }
 

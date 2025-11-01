@@ -55,4 +55,19 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
     @EntityGraph(attributePaths = {"applicant", "substitute"})
     Page<LeaveApplication> findByStatusIn(Set<LeaveApplicationStatus> statuses, Pageable pageable);
 
+    @Query("SELECT la FROM LeaveApplication la " +
+            "JOIN FETCH la.applicant u " +
+            "WHERE u.deptCode = :deptCode AND la.status = :status AND u.useFlag = '1'")
+    List<LeaveApplication> findByDeptCodeAndStatus(
+            @Param("deptCode") String deptCode,
+            @Param("status") LeaveApplicationStatus status
+    );
+
+    @EntityGraph(attributePaths = {"applicant", "substitute"})
+    @Query("SELECT la FROM LeaveApplication la WHERE la.applicant.userId = :userId AND la.status IN :statuses")
+    Page<LeaveApplication> findByApplicantIdAndStatusIn(
+            @Param("userId") String userId,
+            @Param("statuses") Set<LeaveApplicationStatus> statuses,
+            Pageable pageable
+    );
 }

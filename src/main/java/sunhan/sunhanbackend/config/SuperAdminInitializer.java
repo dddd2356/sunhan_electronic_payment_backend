@@ -57,7 +57,7 @@ public class SuperAdminInitializer implements ApplicationRunner {
         superAdmin.setJobType("9");
         superAdmin.setJobLevel("6"); // 슈퍼 어드민 레벨
         superAdmin.setDeptCode("000"); // 시스템 부서
-        superAdmin.setPhone("010-0000-0000");
+        superAdmin.setPhone("01000000000");
         superAdmin.setAddress("시스템");
         superAdmin.setUseFlag("1"); // 사용 가능
         superAdmin.setRole(Role.ADMIN);

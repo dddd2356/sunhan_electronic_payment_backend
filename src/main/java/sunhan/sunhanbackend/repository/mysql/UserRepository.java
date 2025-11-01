@@ -38,7 +38,8 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     // 부서장(첫번째) 조회 (캐시) - key를 더 명확하게 수정
     @Cacheable(value = "deptManagerCache", key = "#deptCode + '_' + #jobLevel")
     Optional<UserEntity> findFirstByDeptCodeAndJobLevel(String deptCode, String jobLevel);
-
+    // deptCode + useFlag로 첫 번째 UserEntity 조회
+    Optional<UserEntity> findFirstByDeptCodeAndUseFlag(String deptCode, String useFlag);
     // 직급별 대표 조회 (캐시)
     @Cacheable(value = "jobLevelCache", key = "#jobLevel")
     Optional<UserEntity> findFirstByJobLevel(String jobLevel);
@@ -86,4 +87,17 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     @Cacheable(value = "hrStaffUseFlagCache", key = "#jobLevel + '_' + #deptCode + '_' + #role")
     Optional<UserEntity> findFirstByJobLevelInAndDeptCodeAndRoleAndUseFlag(List<String> jobLevels, String deptCode, Role role, String useFlag);
 
+    Optional<UserEntity> findByPhone(String phone);
+
+    @Query("SELECT DISTINCT u.deptCode FROM UserEntity u WHERE u.deptCode IS NOT NULL AND u.useFlag = '1'")
+    List<String> findAllActiveDeptCodes();
+
+    //  부서 + 직급 + 활성 여부로 조회
+    List<UserEntity> findByDeptCodeAndJobLevelAndUseFlag(String deptCode, String jobLevel, String useFlag);
+
+    //  직급 + 활성 여부로 조회
+    List<UserEntity> findByJobLevelAndUseFlag(String jobLevel, String useFlag);
+
+    //  활성 여부 + 직급 목록으로 조회
+    List<UserEntity> findByUseFlagAndJobLevelIn(String useFlag, List<String> jobLevels);
 }

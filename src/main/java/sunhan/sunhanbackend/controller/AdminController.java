@@ -75,7 +75,7 @@ public class AdminController {
             Authentication authentication) {
         try {
             String adminUserId = (String) authentication.getPrincipal();
-            List<UserEntity> users = userService.getUsersByDeptCode(adminUserId, deptCode);
+            List<UserEntity> users = userService.getUsersByDeptForAdmin(adminUserId, deptCode);
             return ResponseEntity.ok(users);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
@@ -300,7 +300,7 @@ public class AdminController {
 
             if (adminLevel == 1) {
                 // jobLevel 1인 경우 부서 내 사용자만 조회
-                List<UserEntity> deptUsers = userService.getUsersByDeptCode(adminUserId, admin.getDeptCode());
+                List<UserEntity> deptUsers = userService.getUsersByDeptForAdmin(adminUserId, admin.getDeptCode());
                 System.out.println("Found department users: " + deptUsers.size());
                 return ResponseEntity.ok(deptUsers);
             }else if ((adminLevel == 0 || adminLevel == 1) && adminPermissions.contains(PermissionType.MANAGE_USERS)) {

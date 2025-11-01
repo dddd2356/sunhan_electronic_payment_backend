@@ -6,6 +6,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import sunhan.sunhanbackend.entity.mysql.approval.ApprovalLine;
+import sunhan.sunhanbackend.entity.mysql.approval.DocumentApprovalProcess;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
 import sunhan.sunhanbackend.enums.LeaveType;
 
@@ -50,7 +52,7 @@ public class LeaveApplication {
     private Long id;
     private String applicantId;
     private String substituteId;
-    private String currentApproverId;
+
 
     // JOIN FETCH를 위한 관계 설정
     @ManyToOne(fetch = FetchType.LAZY)
@@ -84,14 +86,6 @@ public class LeaveApplication {
     @Column(name = "status", nullable = false)
     private LeaveApplicationStatus status; // 승인 상태
 
-    @Column(name = "current_approval_step")
-    private String currentApprovalStep; // 현재 승인 단계
-
-    // [추가] 현재 승인 담당자의 ID를 저장하는 필드
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "currentApproverId", insertable = false, updatable = false)
-    private UserEntity currentApprover;
-
     @Column(name = "approval_history", columnDefinition = "TEXT")
     private String approvalHistory; // 승인 이력 (JSON 형태)
 
@@ -119,6 +113,7 @@ public class LeaveApplication {
     @Column(name = "is_printable", nullable = false)
     private boolean printable = false; // 인쇄 가능 여부
 
+    @Deprecated
     @Column(name = "is_substitute_approved")
     private Boolean isSubstituteApproved = false; // 대직자 승인 여부
 
@@ -126,20 +121,27 @@ public class LeaveApplication {
     @Column(name = "is_applicant_signed")
     private Boolean isApplicantSigned = false; // 신청자 서명 여부
 
+    @Deprecated
     @Column(name = "is_dept_head_approved")
     private Boolean isDeptHeadApproved = false; // 부서장 승인 여부
 
+    @Deprecated
     @Column(name = "is_hr_staff_approved")
     private Boolean isHrStaffApproved = false; // 인사팀 승인 여부
 
+    @Deprecated
     @Column(name = "is_center_director_approved")
     private Boolean isCenterDirectorApproved = false; // 진료센터장 승인 여부
 
+    @Deprecated
+    @Column(name = "is_hr_final_approved")
     private Boolean isHrFinalApproved = false;
 
+    @Deprecated
     @Column(name = "is_admin_director_approved")
     private Boolean isAdminDirectorApproved = false; // 행정원장 승인 여부
 
+    @Deprecated
     @Column(name = "is_ceo_director_approved")
     private Boolean isCeoDirectorApproved = false; // 대표원장 승인 여부
 
@@ -156,6 +158,26 @@ public class LeaveApplication {
 
     @OneToMany(mappedBy = "leaveApplication", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<LeaveApplicationAttachment> attachments = new ArrayList<>();
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "approval_line_id")
+    private ApprovalLine approvalLine; // 선택된 결재라인
+
+    // ⚠️ 기존 필드들은 하위 호환성을 위해 유지하되, deprecated 처리 고려
+    @Deprecated
+    @Column(name = "current_approver_id")
+    private String currentApproverId;
+
+    @Deprecated
+    @Column(name = "current_approval_step")
+    private String currentApprovalStep;
+
+    @Column(name = "current_step_order")
+    private Integer currentStepOrder;
+
+    public boolean isUsingApprovalLine() {
+        return approvalLine != null;
+    }
 
     // 양방향 연관관계 편의 메서드
     public void addAttachment(LeaveApplicationAttachment attachment) {

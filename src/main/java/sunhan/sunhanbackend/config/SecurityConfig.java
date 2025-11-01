@@ -4,11 +4,8 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Configurable;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
@@ -17,7 +14,6 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -25,9 +21,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import sunhan.sunhanbackend.filter.JwtAuthenticationFilter;
-import sunhan.sunhanbackend.handler.OAuth2SuccessHandler;
-import sunhan.sunhanbackend.provider.JwtProvider;
-import sunhan.sunhanbackend.service.AuthService;
+
 
 import java.io.IOException;
 
@@ -111,6 +105,9 @@ public class SecurityConfig {
         corsConfiguration.addAllowedMethod("*");  // 모든 HTTP 메서드 허용
         corsConfiguration.addAllowedHeader("*");  // 모든 HTTP 헤더 허용
         corsConfiguration.setAllowCredentials(true);  // 쿠키 전송 허용 (true)
+        //페이지네이션의 총 페이지 계산 할 때에 이렇게 해줘야지 값을 가져올 수 있음.
+        corsConfiguration.addExposedHeader("X-Total-Count");
+        corsConfiguration.addExposedHeader("Content-Range");
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", corsConfiguration);  // 특정 URL 경로에 CORS 설정 적용

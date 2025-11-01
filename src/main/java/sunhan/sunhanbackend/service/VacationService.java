@@ -3,17 +3,22 @@ package sunhan.sunhanbackend.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import sunhan.sunhanbackend.dto.response.EmployeeVacationDto;
 import sunhan.sunhanbackend.dto.response.VacationHistoryResponseDto;
+import sunhan.sunhanbackend.dto.response.VacationStatisticsResponseDto;
 import sunhan.sunhanbackend.dto.response.VacationStatusResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
+import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -25,6 +30,7 @@ public class VacationService {
     private final UserRepository userRepository;
     private final LeaveApplicationRepository leaveApplicationRepository;
     private final UserService userService;
+    private final PermissionService permissionService;
 
     /**
      * 사용자의 휴가 현황 조회
@@ -140,5 +146,123 @@ public class VacationService {
             case "BEREAVEMENT_LEAVE": return "경조휴가";
             default: return leaveType;
         }
+    }
+
+    /**
+     * 부서별 휴가 통계 조회
+     */
+    @Transactional(readOnly = true)
+    public List<VacationStatisticsResponseDto> getDepartmentStatistics(String adminUserId) {
+        // 1. 사용자 조회 (예외는 getUserInfo가 던짐)
+        UserEntity admin = userService.getUserInfo(adminUserId);
+
+        // 2. jobLevel 안전 파싱
+        int jobLevel = -1;
+        try {
+            if (admin.getJobLevel() != null) {
+                jobLevel = Integer.parseInt(admin.getJobLevel().trim());
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("잘못된 직급 정보입니다.");
+        }
+
+        // 3. 관리자 여부 (기존 규칙 유지: jobLevel == 6)
+        boolean isAdmin = jobLevel == 6;
+
+        // 4. 휴가원 권한 여부 (PermissionService 사용)
+        boolean hasVacationPermission = permissionService.hasPermission(adminUserId, PermissionType.HR_LEAVE_APPLICATION);
+
+        // 5. 최종 권한 검사: 관리자 OR 휴가권한 보유자
+        if (!isAdmin && !hasVacationPermission) {
+            throw new AccessDeniedException("통계 조회 권한이 없습니다.");
+        }
+
+        // 6. 기존 통계 로직 실행
+        List<String> deptCodes = userRepository.findAllActiveDeptCodes();
+
+        return deptCodes.stream()
+                .map(this::calculateDeptStatistics)
+                .sorted((a, b) -> a.getDeptCode().compareTo(b.getDeptCode()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 특정 부서의 통계 계산
+     */
+    private VacationStatisticsResponseDto calculateDeptStatistics(String deptCode) {
+        List<UserEntity> deptUsers = userRepository.findByDeptCodeAndUseFlag(deptCode, "1");
+
+        if (deptUsers.isEmpty()) {
+            return VacationStatisticsResponseDto.builder()
+                    .deptCode(deptCode)
+                    .deptName(deptCode)
+                    .totalEmployees(0)
+                    .avgUsageRate(0.0)
+                    .totalVacationDays(0)
+                    .totalUsedDays(0)
+                    .totalRemainingDays(0)
+                    .employees(new ArrayList<>())
+                    .build();
+        }
+
+        List<EmployeeVacationDto> employeeStats = deptUsers.stream()
+                .map(this::calculateEmployeeVacation)
+                .sorted((a, b) -> b.getUsageRate().compareTo(a.getUsageRate()))
+                .collect(Collectors.toList());
+
+        int totalVacationDays = employeeStats.stream()
+                .mapToInt(EmployeeVacationDto::getTotalDays)
+                .sum();
+
+        int totalUsedDays = employeeStats.stream()
+                .mapToInt(EmployeeVacationDto::getUsedDays)
+                .sum();
+
+        int totalRemainingDays = employeeStats.stream()
+                .mapToInt(EmployeeVacationDto::getRemainingDays)
+                .sum();
+
+        double avgUsageRate = employeeStats.stream()
+                .mapToDouble(EmployeeVacationDto::getUsageRate)
+                .average()
+                .orElse(0.0);
+
+        return VacationStatisticsResponseDto.builder()
+                .deptCode(deptCode)
+                .deptName(deptCode)
+                .totalEmployees(deptUsers.size())
+                .avgUsageRate(Math.round(avgUsageRate * 100.0) / 100.0)
+                .totalVacationDays(totalVacationDays)
+                .totalUsedDays(totalUsedDays)
+                .totalRemainingDays(totalRemainingDays)
+                .employees(employeeStats)
+                .build();
+    }
+
+    /**
+     * 개별 직원의 휴가 정보 계산
+     */
+    private EmployeeVacationDto calculateEmployeeVacation(UserEntity user) {
+        Double usedDays = leaveApplicationRepository
+                .findByApplicantIdAndStatus(user.getUserId(), LeaveApplicationStatus.APPROVED)
+                .stream()
+                .mapToDouble(leave -> leave.getTotalDays() != null ? leave.getTotalDays() : 0.0)
+                .sum();
+
+        int totalDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15;
+        int used = usedDays.intValue();
+        int remaining = totalDays - used;
+        double usageRate = totalDays > 0 ? (used * 100.0 / totalDays) : 0.0;
+
+        return EmployeeVacationDto.builder()
+                .userId(user.getUserId())
+                .userName(user.getUserName())
+                .jobLevel(user.getJobLevel())
+                .jobType(user.getJobType())
+                .totalDays(totalDays)
+                .usedDays(used)
+                .remainingDays(remaining)
+                .usageRate(Math.round(usageRate * 100.0) / 100.0)
+                .build();
     }
 }

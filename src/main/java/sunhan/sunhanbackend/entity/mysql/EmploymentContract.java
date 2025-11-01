@@ -26,7 +26,7 @@ public class EmploymentContract {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "creator_id", nullable = false) // ⭐️ 이 부분이 누락되었을 가능성이 높습니다.
+    @JoinColumn(name = "creator_id", nullable = false) // 이 부분이 누락되었을 가능성이 높습니다.
     private UserEntity creator;
 
     @ManyToOne(fetch = FetchType.LAZY)

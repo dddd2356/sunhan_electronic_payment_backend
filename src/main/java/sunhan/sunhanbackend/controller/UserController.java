@@ -10,6 +10,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import sunhan.sunhanbackend.dto.request.UpdateProfileRequestDto;
+import sunhan.sunhanbackend.dto.response.DepartmentDto;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.service.ContractService;
@@ -87,7 +88,10 @@ public class UserController {
                     requestDto.getAddress(),
                     requestDto.getDetailAddress(),
                     requestDto.getCurrentPassword(),
-                    requestDto.getNewPassword()
+                    requestDto.getNewPassword(),
+                    requestDto.getPrivacyConsent(),
+                    requestDto.getNotificationConsent(),
+                    requestDto.getSmsVerificationCode()
             );
             return ResponseEntity.ok(updatedUser);
         } catch (ObjectOptimisticLockingFailureException e) {
@@ -319,8 +323,92 @@ public class UserController {
                         .body(Map.of("error", "권한이 없습니다."));
             }
 
-            List<UserEntity> deptUsers = userService.getUsersByDeptCode(userId, user.getDeptCode());
+            List<UserEntity> deptUsers = userService.getUsersByDeptForAdmin(userId, user.getDeptCode());
             return ResponseEntity.ok(deptUsers);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 📲 SMS 인증번호 전송
+     * POST /api/v1/user/{userId}/send-verification
+     */
+    @PostMapping("/{userId}/send-verification")
+    public ResponseEntity<Map<String, Object>> sendVerificationCode(
+            @PathVariable String userId,
+            @RequestParam String phone // 전송할 핸드폰 번호
+    ) {
+        try {
+            // 인증번호 전송
+            userService.sendVerificationCode(phone, userId);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "인증번호가 전송되었습니다.");
+            response.put("phone", phone);
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("SMS 인증번호 전송 실패: userId={}, phone={}", userId, phone, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "인증번호 전송 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * ✅ SMS 인증번호 검증
+     * POST /api/v1/user/{userId}/verify-code
+     */
+    @PostMapping("/{userId}/verify-code")
+    public ResponseEntity<Map<String, Object>> verifySmsCode(
+            @PathVariable String userId,
+            @RequestParam String phone,
+            @RequestParam String code
+    ) {
+        try {
+            boolean verified = userService.verifySmsCode(phone, code);
+            if (verified) {
+                return ResponseEntity.ok(Map.of("message", "인증 성공"));
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("message", "인증 실패 또는 코드 만료"));
+            }
+        } catch (Exception e) {
+            log.error("SMS 인증 검증 오류: userId={}, phone={}, code={}", userId, phone, code, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "인증 검증 중 오류가 발생했습니다."));
+        }
+    }
+
+    @GetMapping("/departments")
+    public ResponseEntity<List<DepartmentDto>> getDepartments() {
+        List<DepartmentDto> departments = userService.getAllDepartments();
+        return ResponseEntity.ok(departments);
+    }
+
+    /**
+     * 특정 부서의 직원 목록 조회
+     */
+    @GetMapping("/department/{deptCode}")
+    public ResponseEntity<?> getUsersByDepartment(
+            @PathVariable String deptCode,
+            Authentication authentication
+    ) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            // 현재 로그인 사용자
+            String userId = (String) authentication.getPrincipal();
+            UserEntity currentUser = userService.getUserInfo(userId);
+
+            // 부서 직원 조회
+            List<UserEntity> users = userService.getActiveUsersByDept(userId, deptCode);
+
+            return ResponseEntity.ok(users);
+
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", e.getMessage()));

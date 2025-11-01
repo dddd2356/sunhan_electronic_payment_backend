@@ -8,6 +8,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -130,7 +131,6 @@ public class LeaveApplicationPdfRenderer {
                     log.warn("Malgun Gothic font file (fonts/malgun.ttf) not found. PDF might not render Korean correctly.");
                 }
             }
-
             builder.withHtmlContent(htmlContent, null);
             builder.toStream(os);
             builder.run();
@@ -257,6 +257,8 @@ public class LeaveApplicationPdfRenderer {
             font-size: 10px;
             display: inline-block;
             padding-right: 25px;
+            min-width: 33.33%;
+            box-sizing: border-box;
         }
         .checkbox-mark {
             width: 10px; height: 10px; border: 1px solid #000;
@@ -279,14 +281,18 @@ public class LeaveApplicationPdfRenderer {
             padding-right: 20px; padding-bottom: 20px;
         }
         .final-approval-mark {
-             color: #d00;
-             font-weight: 700;
-             font-size: 11px;
+             background-color: rgb(255, 0, 0) !important;
+             color: rgb(255, 255, 255) !important;
+             font-weight: bold !important;
+             font-size: 12px;
              display: inline-block;
-             padding: 1px 2px;
-             line-height: 1.1;
+             padding: 3px 8px;
+             line-height: 1.3;
              text-align: center;
              vertical-align: middle;
+             border: 2px solid rgb(255, 0, 0);
+             -fs-border-spacing-horizontal: 0;
+             -fs-border-spacing-vertical: 0;
         }
         .signature-image {
                      max-width: 60px; max-height: 55px; /* 크기 증가 */
@@ -488,27 +494,38 @@ public class LeaveApplicationPdfRenderer {
                                                 String currentStepForCell,
                                                 boolean allowShowHigherSignatures) {
         StringBuilder sb = new StringBuilder("<td class='signature-cell'>");
-        // HR_FINAL_APPROVAL 단계 특별 처리
+
+        // 1) span 스타일 (강제)
+        String spanStyle = "color:#ff0000 !important; background-color:transparent !important;"
+                + " font-weight:bold !important; font-size:9px !important;"
+                + " display:inline-block !important; padding:0 2px !important; margin:2px !important; border:none !important;";
+
+        // 2) legacy <font> fallback (일부 구형 렌더러에 유효)
+        String fontStart = "<font color=\"#ff0000\">"; // 닫는 태그로 종료
+
+        // 3) SVG fallback (색 보장이 비교적 확실)
+        java.util.function.Function<String, String> makeSvg = text -> {
+            // width/height 조절 필요하면 숫자 변경
+            return "<svg xmlns='http://www.w3.org/2000/svg' width='60' height='20' role='img' aria-label='" + text + "'>"
+                    + "<rect width='100%' height='100%' fill='transparent'/>"
+                    + "<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='#ff0000' "
+                    + "style=\"font-family: 'Malgun Gothic', Arial, sans-serif; font-size:11px; font-weight:bold;\">"
+                    + escapeXml(text)
+                    + "</text></svg>";
+        };
+
+        // HR_FINAL_APPROVAL 특수 처리(기존 로직 유지)
         if ("HR_FINAL_APPROVAL".equals(currentStepForCell)) {
             boolean isActualFinalApprovalStep = (isFinalApproved && finalApprovalStep != null && finalApprovalStep.equals(currentStepForCell));
             boolean isHigherThanFinal = (isFinalApproved && finalApprovalStep != null && isHigherStep(finalApprovalStep, currentStepForCell));
-
-            if (isActualFinalApprovalStep) {
-                // 이 단계에서 전결 처리한 경우
-                log.info("HR_FINAL_APPROVAL에서 전결 처리");
-                sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
-            } else if (isHigherThanFinal) {
-                // 상위 단계에서 전결 처리된 경우
-                log.info("HR_FINAL_APPROVAL - 상위에서 전결 처리됨");
-                sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
-            } else {
-                // 일반적인 경우 - 확인 단계이므로 빈 셀
-                log.info("HR_FINAL_APPROVAL - 일반 확인 단계");
-                sb.append("/");
-            }
+            // 전결 문구 표시 — SVG로도 보냄
+            String text = "전결";
+            sb.append("<span style='").append(spanStyle).append("'>").append(text).append("</span>");
             sb.append("</td>");
             return sb.toString();
         }
+
+        // 기존 시그니처 추출
         boolean isSignedByThisPerson = false;
         String rawImage = null;
         String rawText = null;
@@ -519,47 +536,65 @@ public class LeaveApplicationPdfRenderer {
         }
 
         String imageUrl = normalizeImageUrl(rawImage);
-
-        // 실제 전결 처리한 단계인지 확인
         boolean isActualFinalApprovalStep = (isFinalApproved && finalApprovalStep != null && finalApprovalStep.equals(currentStepForCell));
-
-        // 전결 단계보다 '상위' 인지 확인 (전결로 자동 승인되어야 하는 단계)
         boolean isHigherThanFinal = (isFinalApproved && finalApprovalStep != null && isHigherStep(finalApprovalStep, currentStepForCell));
 
-        // 우선순위: 1) 만약 현재 셀이 전결보다 상위 단계이면 '전결처리' (단, 옵션으로 저장된 서명을 대신 보여줄 수 있게 함)
+        // Helper to append text using span->font->svg fallback
+        java.util.function.Consumer<String> appendTextWithFallback = txt -> {
+            if (txt == null) txt = "";
+            // 1) inline span with !important
+            sb.append("<span style='").append(spanStyle).append("'>").append(escapeHtml(txt)).append("</span>");
+            // 2) also include <font> fallback commented (won't break) — uncomment if you want to force
+            // sb.append(fontStart).append(escapeHtml(txt)).append("</font>");
+            // 3) include SVG fallback (uncomment if prefer SVG instead)
+            // sb.append(makeSvg.apply(txt));
+        };
+
+        // 우선순위 로직 (기존과 동일)
         if (isHigherThanFinal) {
             if (allowShowHigherSignatures && isSignedByThisPerson) {
-                // 옵션 허용 시: 상위 단계의 저장된 서명(이미지 또는 텍스트)을 대신 표시
                 if (imageUrl != null && !imageUrl.isBlank()) {
                     sb.append("<img src='").append(imageUrl).append("' alt='서명' class='signature-image'/>");
                 } else {
-                    sb.append(rawText != null && !rawText.isBlank() ? rawText : "승인");
+                    String textToDisplay = (rawText != null && !rawText.isBlank()) ? rawText : "승인";
+                    String trimmedText = textToDisplay.trim();
+                    if ("전결처리".equals(trimmedText) || "전결".equals(trimmedText)) {
+                        // 전결 문구는 SVG로 확실히
+                        sb.append(makeSvg.apply(textToDisplay));
+                    } else {
+                        appendTextWithFallback.accept(textToDisplay);
+                    }
                 }
             } else {
-                // 기본 동작: 전결처리 마크 표시 (저장된 서명 무시)
-                sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
+                sb.append("/");
             }
-        }
-        // 2) 실제 전결 처리한 단계라면 그 사람의 서명을 우선적으로 표시 (없으면 전결표시)
-        else if (isActualFinalApprovalStep) {
+        } else if (isActualFinalApprovalStep) {
             if (isSignedByThisPerson) {
                 if (imageUrl != null && !imageUrl.isBlank()) {
                     sb.append("<img src='").append(imageUrl).append("' alt='서명' class='signature-image'/>");
                 } else {
-                    sb.append(rawText != null && !rawText.isBlank() ? rawText : "전결처리!");
+                    String textToDisplay = (rawText != null && !rawText.isBlank()) ? rawText : "전결처리";
+                    // 전결/전결처리일땐 SVG로 확실히
+                    if ("전결처리".equals(textToDisplay) || "전결".equals(textToDisplay)) {
+                        sb.append(makeSvg.apply(textToDisplay));
+                    } else {
+                        appendTextWithFallback.accept(textToDisplay);
+                    }
                 }
             } else {
-                // 드문 경우: finalApproval가 설정됐는데 실제 서명이 없는 경우에도 전결처리 마크로 표시
-                sb.append("<div class='final-approval-mark'><span>전결처리!</span></div>");
+                sb.append("<span style='").append(spanStyle).append("'>전결</span>");
             }
-        }
-        // 3) 그 외의 일반적인 단계(전결 대상도 아니고, 실제 승인/서명 있으면 표시)
-        else {
+        } else {
             if (isSignedByThisPerson) {
                 if (imageUrl != null && !imageUrl.isBlank()) {
                     sb.append("<img src='").append(imageUrl).append("' alt='서명' class='signature-image'/>");
                 } else {
-                    sb.append(rawText != null && !rawText.isBlank() ? rawText : "승인");
+                    String textToDisplay = (rawText != null && !rawText.isBlank()) ? rawText : "승인";
+                    if ("전결처리".equals(textToDisplay) || "전결".equals(textToDisplay)) {
+                        sb.append(makeSvg.apply(textToDisplay));
+                    } else {
+                        appendTextWithFallback.accept(textToDisplay);
+                    }
                 }
             } else {
                 sb.append("/");
@@ -567,8 +602,17 @@ public class LeaveApplicationPdfRenderer {
         }
 
         sb.append("</td>");
-
         return sb.toString();
+    }
+
+    // 간단한 HTML/XML escape (SVG 안전성 위해)
+    private static String escapeHtml(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("\"", "&quot;").replace("'", "&#39;");
+    }
+    private static String escapeXml(String s) {
+        return escapeHtml(s);
     }
 
     // 날짜 셀 생성 (변경: allowShowHigherSignatures 파라미터 추가)

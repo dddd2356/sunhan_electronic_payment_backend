@@ -6,19 +6,24 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import sunhan.sunhanbackend.dto.response.DepartmentDto;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.entity.mysql.VerificationCode;
 import sunhan.sunhanbackend.entity.oracle.OracleEntity;
+import sunhan.sunhanbackend.enums.NotificationChannel;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.Role;
+import sunhan.sunhanbackend.repository.mysql.VerificationCodeRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import org.springframework.cache.annotation.Cacheable;
+import sunhan.sunhanbackend.template.NotificationTemplate;
+
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -26,8 +31,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -38,15 +45,19 @@ public class UserService {
     private final OracleService oracleService;
     private final PasswordEncoder passwdEncoder = new BCryptPasswordEncoder();
     private final PermissionService permissionService;
+    private final NotificationService notificationService;
+    private final VerificationCodeRepository verificationCodeRepository;  // 새 리포지토리
 
     @Value("${file.upload.sign-dir}")
     private String uploadDir;  // "/uploads/signatures/"
 
     @Autowired
-    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService) {
+    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService, NotificationService notificationService, VerificationCodeRepository verificationCodeRepository) {
         this.userRepository = userRepository;
         this.oracleService = oracleService;
         this.permissionService = permissionService;
+        this.notificationService = notificationService;
+        this.verificationCodeRepository = verificationCodeRepository;
     }
 
     /**
@@ -73,7 +84,8 @@ public class UserService {
         dto.setDetailAddress(user.getDetailAddress());
         dto.setSignimage(user.getSignimage());
         dto.setRole(user.getRole() != null ? user.getRole().toString() : null);
-
+        dto.setPrivacyConsent(user.getPrivacyConsent());
+        dto.setNotificationConsent(user.getNotificationConsent());
         // 🔹 엔티티를 String으로 변환
         List<String> userPerms = permissionService.getUserPermissions(userId).stream()
                 .map(up -> up.getPermissionType().toString())
@@ -91,14 +103,6 @@ public class UserService {
 
         return dto;
     }
-    // 모든 유저 조회 메서드
-    /**
-     * 캐시 테스트용 메서드
-     */
-//    public List<UserEntity> findAllUsers() {
-//        System.out.println("=== DB에서 모든 사용자 조회 ===");
-//        return userRepository.findAll();
-//    }
 
     //사용자 목록 useflag가 1인경우에 나오게끔 함. 총 휴가 계산하는 페이지, 근로계약서 생성 목록
     public List<UserEntity> findAllUsers() {
@@ -106,13 +110,8 @@ public class UserService {
         return userRepository.findByUseFlag("1");
     }
 
-
-
     /**
-     * 사용자 정보 (전화번호, 주소) 및 비밀번호 업데이트 메서드
-     */
-    /**
-     * 🔧 프로필 업데이트 - 캐시 갱신 적용
+     * 사용자 정보 (전화번호, 주소) 및 비밀번호 업데이트 메서드, 🔧 프로필 업데이트 - 캐시 갱신 적용
      */
     @Transactional
     @CachePut(value = "userCache", key = "#userId")
@@ -121,41 +120,105 @@ public class UserService {
                                     String address,
                                     String detailAddress,
                                     String currentPassword,
-                                    String newPassword) {
+                                    String newPassword,
+                                    Boolean privacyConsent,        // 개인정보 동의
+                                    Boolean notificationConsent,   // 알림 동의
+                                    String smsVerificationCode) {  // 핸드폰 인증 코드
+
         UserEntity user = getUserInfo(userId);
-        if (user == null) {
-            throw new RuntimeException("User not found: " + userId);
+
+        // 1️⃣ 개인정보 동의 필수
+        if (privacyConsent == null || !privacyConsent) {
+            throw new RuntimeException("개인정보 수집·이용에 동의해야 합니다.");
+        }
+        user.setPrivacyConsent(true);
+
+        // 2️⃣ 핸드폰 변경 및 인증 처리
+        if (phone != null && !phone.trim().isEmpty() && !phone.equals(user.getPhone())) {
+            // 핸드폰 번호가 바뀌었을 때만 인증 코드 필요
+            if (smsVerificationCode == null || smsVerificationCode.isEmpty()) {
+                throw new RuntimeException("전화번호 변경 시 인증 코드가 필요합니다.");
+            }
+
+            VerificationCode vc = verificationCodeRepository.findByPhone(phone.trim());
+            if (vc == null || !vc.getCode().equals(smsVerificationCode) || vc.getExpiry().isBefore(LocalDateTime.now())) {
+                throw new RuntimeException("전화번호 인증 실패 또는 코드 만료");
+            }
+
+            // 인증 성공 시
+            verificationCodeRepository.delete(vc);  // 검증 후 삭제
+            user.setPhone(phone.trim());
+            user.setPhoneVerified(true);
+        } else {
+            // 번호가 바뀌지 않았다면 인증 코드 없이 업데이트 가능
+            user.setPhoneVerified(true); // 기존 번호는 이미 인증된 상태
         }
 
-        // 전화번호 업데이트
-        if (phone != null && !phone.trim().isEmpty()) {
-            user.setPhone(phone.trim());
-        }
-        // 주소 업데이트
+        // 3️⃣ 주소 업데이트
         if (address != null && !address.trim().isEmpty()) {
             user.setAddress(address.trim());
         }
-        // 상세 주소 업데이트
         if (detailAddress != null && !detailAddress.trim().isEmpty()) {
             user.setDetailAddress(detailAddress.trim());
         }
-        // 비밀번호 업데이트 로직
+
+        // 4️⃣ 비밀번호 업데이트
         if (newPassword != null && !newPassword.trim().isEmpty()) {
             if (currentPassword == null || currentPassword.isEmpty() ||
                     !passwdEncoder.matches(currentPassword, user.getPasswd())) {
                 throw new RuntimeException("현재 비밀번호가 일치하지 않습니다.");
             }
-
             String encodedNewPasswd = passwdEncoder.encode(newPassword);
             user.setPasswd(encodedNewPasswd);
             user.setPasswordChangeRequired(false);
-            log.info("사용자 {} 비밀번호 변경 완료", userId);
         }
 
-        return userRepository.save(user);
+        // 5️⃣ 알림 동의 선택적 업데이트
+        if (notificationConsent != null) {
+            user.setNotificationConsent(notificationConsent);
+        }
+
+        UserEntity savedUser = userRepository.save(user);
+        log.info("사용자 {} 프로필 업데이트 완료 (핸드폰 인증={}, 알림동의={})",
+                userId, savedUser.getPhoneVerified(), savedUser.getNotificationConsent());
+
+        return savedUser;
     }
 
+    // 새 메서드: 인증 코드 생성 및 SMS 전송
+    public void sendVerificationCode(String phone, String userId) {
+        UserEntity user = getUserInfo(userId);
+        String code = generateRandomCode(6); // 6자리 랜덤 코드
 
+        // DB 저장 (기존 코드 덮어쓰기)
+        verificationCodeRepository.save(new VerificationCode(phone, code, LocalDateTime.now().plusMinutes(5)));
+
+        Map<String, String> variables = Map.of(
+                "#{userName}", user.getUserName(),
+                "#{verificationCode}", code
+        );
+        notificationService.sendNotification(NotificationChannel.SMS, phone,  NotificationTemplate.PHONE_VERIFICATION.getCode(), variables);
+    }
+
+    // 새 메서드: 랜덤 코드 생성
+    private String generateRandomCode(int length) {
+        Random random = new Random();
+        StringBuilder code = new StringBuilder();
+        for (int i = 0; i < length; i++) {
+            code.append(random.nextInt(10));  // 0-9 숫자
+        }
+        return code.toString();
+    }
+
+    // 새 메서드: 코드 검증
+    public boolean verifySmsCode(String phone, String code) {
+        VerificationCode vc = verificationCodeRepository.findByPhone(phone);
+        if (vc != null && vc.getCode().equals(code) && vc.getExpiry().isAfter(LocalDateTime.now())) {
+            verificationCodeRepository.delete(vc);  // 검증 후 삭제
+            return true;
+        }
+        return false;
+    }
 
     /**
      * 로그인 인증 메서드
@@ -163,9 +226,7 @@ public class UserService {
      * 2) 있으면 BCrypt 검사
      * 3) 없으면, 입력한 비밀번호가 userId와 동일하고 Oracle에 존재할 경우
      *    Oracle에서 유저 정보 가져와 MySQL에 저장 → 인증 성공
-     */
-    /**
-     * 🔧 로그인 인증 - 성능 최적화
+     *    🔧 로그인 인증 - 성능 최적화
      */
     @Transactional
     public boolean authenticateUser(String userId, String password) {
@@ -246,9 +307,7 @@ public class UserService {
      * 사인 이미지 업로드 (개선된 버전)
      * - 파일시스템에 저장
      * - DB에 BLOB(signimage) + 경로(signpath) 저장 (YYYYMMDD_사번_이름.ext)
-     */
-    /**
-     * 🔧 서명 업로드 - 트랜잭션 및 예외 처리 강화
+     * - 🔧 서명 업로드 - 트랜잭션 및 예외 처리 강화
      */
     @Transactional
     @CacheEvict(value = "userCache", key = "#userId")
@@ -314,8 +373,6 @@ public class UserService {
     /**
      * 사용자의 사인 이미지를 Base64 데이터 URL 형식으로 반환
      * 프론트엔드에서 <img> 태그의 src에 직접 사용할 수 있는 형식
-     */
-    /**
      * 🔧 서명 이미지 조회 - 캐시 적용
      */
     @Cacheable(value = "signatureCache", key = "#userId",
@@ -542,7 +599,7 @@ public class UserService {
     /**
      * 부서별 직원 조회 (JobLevel 1인 사람용)
      */
-    public List<UserEntity> getUsersByDeptCode(String adminUserId, String deptCode) {
+    public List<UserEntity> getUsersByDeptForAdmin(String adminUserId, String deptCode) {
         Optional<UserEntity> userOpt = userRepository.findByUserId(adminUserId);
         // 사용자가 존재하지 않으면 예외를 던지는 것이 더 안전합니다.
         UserEntity admin = userOpt.orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다: " + adminUserId));
@@ -669,6 +726,36 @@ public class UserService {
         }
 
         return manageableUsers;
+    }
+
+    /**
+     * 전체 부서 조회 (사용자가 접근 가능)
+     */
+    public List<DepartmentDto> getAllDepartments() {
+        // deptCode 중복 제거하고 List로 변환
+        List<String> deptCodes = userRepository.findAllActiveDeptCodes();
+
+        // deptName은 deptCode 기준으로 UserEntity 첫번째 값에서 가져오기
+        return deptCodes.stream()
+                .map(code -> userRepository.findFirstByDeptCodeAndUseFlag(code, "1")
+                        .map(u -> new DepartmentDto(
+                                u.getDeptCode(),
+                                u.getDeptCode(), // deptName이 따로 없으면 코드 사용
+                                null // 상위 부서 정보 없으면 null
+                        ))
+                        .orElse(null))
+                .filter(d -> d != null)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 부서 코드로 직원 목록 조회
+     */
+    public List<UserEntity> getActiveUsersByDept(String currentUserId, String deptCode) {
+        // 필요시 현재 사용자 정보 활용 가능
+        // UserEntity currentUser = getUserInfo(currentUserId);
+
+        return userRepository.findByDeptCodeAndUseFlag(deptCode, "1"); // useFlag=1인 활성 사용자만
     }
 
 

@@ -8,6 +8,8 @@ import java.util.Map;
 
 @Data
 public class LeaveApplicationUpdateFormRequestDto {
+    // ✅ 1. 선택된 결재라인 ID 필드 추가 (필수)
+    private Long approvalLineId;
     private ApplicantInfo applicantInfo;
     private SubstituteInfo substituteInfo;
     private List<String> leaveTypes;

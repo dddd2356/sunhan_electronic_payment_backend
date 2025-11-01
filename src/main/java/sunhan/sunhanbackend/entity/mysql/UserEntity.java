@@ -47,7 +47,7 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     private String signpath;
     //BLOB 형태로 이미지 자체 저장
     @Lob
-    @Basic(fetch = FetchType.EAGER)
+    //@Basic(fetch = FetchType.EAGER)
     @Column(name = "signimage")
     private byte[] signimage;
     @Column(name = "passwd_change_required") // 컬럼명은 실제 DB에 맞게
@@ -61,6 +61,17 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
 
     @Column(name = "used_vacation_days")
     private Integer usedVacationDays = 0; // 사용한 휴가일수
+
+    @Column(name = "phone_verified")
+    private Boolean phoneVerified = false;
+
+    // 개인정보 수집/이용 동의 필드 추가
+    @Column(name = "privacy_consent")
+    private Boolean privacyConsent = false; // 기본값은 false로 설정
+
+    // 알림 수신 동의 여부 필드 추가
+    @Column(name = "notification_consent")
+    private Boolean notificationConsent = false; // 기본값은 false로 설정
 
     public boolean isAdmin() {
         return this.role == Role.ADMIN;
@@ -94,5 +105,58 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     @Override
     public int hashCode() {
         return Objects.hash(userId);
+    }
+
+    /**
+     * 남은 연차 일수 계산
+     * @return 총 휴가일수 - 사용한 휴가일수
+     */
+    public Integer getRemainingAnnualLeave() {
+        if (totalVacationDays == null) {
+            return 15; // 기본값
+        }
+        if (usedVacationDays == null) {
+            return totalVacationDays;
+        }
+        return Math.max(0, totalVacationDays - usedVacationDays);
+    }
+
+    /**
+     * 휴가 사용
+     * @param days 사용할 일수
+     * @throws IllegalStateException 잔여 일수 부족 시
+     */
+    public void useVacationDays(double days) {
+        if (days <= 0) {
+            throw new IllegalArgumentException("사용 일수는 0보다 커야 합니다.");
+        }
+
+        if (getRemainingAnnualLeave() < days) {
+            throw new IllegalStateException(
+                    String.format("잔여 연차가 부족합니다. (필요: %.1f일, 잔여: %d일)",
+                            days, getRemainingAnnualLeave())
+            );
+        }
+
+        if (usedVacationDays == null) {
+            usedVacationDays = 0;
+        }
+        usedVacationDays += (int) Math.ceil(days);
+    }
+
+    /**
+     * 휴가 복구 (취소 시)
+     * @param days 복구할 일수
+     */
+    public void restoreVacationDays(double days) {
+        if (days <= 0) {
+            throw new IllegalArgumentException("복구 일수는 0보다 커야 합니다.");
+        }
+
+        if (usedVacationDays == null) {
+            usedVacationDays = 0;
+        }
+
+        usedVacationDays = Math.max(0, usedVacationDays - (int) Math.ceil(days));
     }
 }

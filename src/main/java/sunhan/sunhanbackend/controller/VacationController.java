@@ -1,12 +1,15 @@
 package sunhan.sunhanbackend.controller;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import sunhan.sunhanbackend.dto.response.VacationHistoryResponseDto;
+import sunhan.sunhanbackend.dto.response.VacationStatisticsResponseDto;
 import sunhan.sunhanbackend.dto.response.VacationStatusResponseDto;
 import sunhan.sunhanbackend.service.VacationService;
 
@@ -14,6 +17,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/vacation")
 @RequiredArgsConstructor
@@ -148,6 +152,23 @@ public class VacationController {
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "휴가 내역 조회 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 부서별 휴가 통계 조회
+     */
+    @GetMapping("/statistics")
+    public ResponseEntity<?> getDepartmentStatistics(
+            @AuthenticationPrincipal String userId) {
+        try {
+            List<VacationStatisticsResponseDto> statistics =
+                    vacationService.getDepartmentStatistics(userId);
+            return ResponseEntity.ok(statistics);
+        } catch (RuntimeException e) {
+            log.error("통계 조회 실패: {}", e.getMessage( ));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", e.getMessage()));
         }
     }
 }
