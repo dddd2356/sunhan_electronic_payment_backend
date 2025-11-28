@@ -47,7 +47,6 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     private String signpath;
     //BLOB 형태로 이미지 자체 저장
     @Lob
-    //@Basic(fetch = FetchType.EAGER)
     @Column(name = "signimage")
     private byte[] signimage;
     @Column(name = "passwd_change_required") // 컬럼명은 실제 DB에 맞게

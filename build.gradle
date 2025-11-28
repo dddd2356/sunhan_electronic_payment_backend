@@ -39,8 +39,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	// 오라클 드라이버
 	implementation 'com.oracle.database.jdbc:ojdbc8'
-	runtimeOnly 'com.mysql:mysql-connector-j'
-
+	implementation 'com.mysql:mysql-connector-j'
 	annotationProcessor 'org.projectlombok:lombok'
 	implementation 'org.springframework.boot:spring-boot-starter-cache'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'

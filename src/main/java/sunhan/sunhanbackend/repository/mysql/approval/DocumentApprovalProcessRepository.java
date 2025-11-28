@@ -45,4 +45,16 @@ public interface DocumentApprovalProcessRepository extends JpaRepository<Documen
             "AND step.approverId = :approverId " +
             "AND dap.status = 'IN_PROGRESS'")
     List<DocumentApprovalProcess> findPendingProcessesByApproverId(@Param("approverId") String approverId);
+
+    // ✅ 기존 메서드 유지 (Collection 파라미터)
+    List<DocumentApprovalProcess> findByDocumentTypeAndStatusIn(
+            DocumentType documentType,
+            List<ApprovalProcessStatus> statuses
+    );
+
+    // ✅ 새 메서드 추가 (단일 파라미터)
+    List<DocumentApprovalProcess> findByDocumentTypeAndStatus(
+            DocumentType documentType,
+            ApprovalProcessStatus status
+    );
 }

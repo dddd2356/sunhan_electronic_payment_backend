@@ -218,6 +218,7 @@ public class UserController {
 
             // user 조회 (EntityNotFoundException 발생 가능)
             UserEntity user = userService.getUserInfo(userId);
+            UserResponseDto userDto = userService.getUserWithPermissions(userId);
 
             // 널 안전성: role 등 필드가 널일 수 있음
             Map<String, Object> permissions = new HashMap<>();
@@ -228,6 +229,7 @@ public class UserController {
             permissions.put("deptCode", user.getDeptCode());
             permissions.put("isAdmin", user.isAdmin());
             permissions.put("isSuperAdmin", user.isSuperAdmin());
+            permissions.put("permissions", userDto.getPermissions());
 
             // 관리 가능한 사용자 수: user.isAdmin()이 true일 때만 service 호출
             if (Boolean.TRUE.equals(user.isAdmin())) {
@@ -262,6 +264,7 @@ public class UserController {
                     .body(Map.of("error", "권한 정보를 가져오는 중 오류가 발생했습니다."));
         }
     }
+
     private String extractUserIdFromAuthentication(Authentication authentication) {
         if (authentication == null) return null;
 

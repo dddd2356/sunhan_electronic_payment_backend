@@ -247,9 +247,9 @@ public class PermissionService {
         UserEntity targetUser = userRepository.findByUserId(targetUserId)
                 .orElseThrow(() -> new RuntimeException("대상 사용자를 찾을 수 없습니다: " + targetUserId));
 
-        if (targetUser.getRole() != Role.ADMIN) {
-            throw new RuntimeException("ADMIN 권한이 있는 사용자에게만 인사 권한을 부여할 수 있습니다.");
-        }
+//        if (targetUser.getRole() != Role.ADMIN) {
+//            throw new RuntimeException("ADMIN 권한이 있는 사용자에게만 인사 권한을 부여할 수 있습니다.");
+//        }
 
         if (userPermissionRepository.existsByUserIdAndPermissionType(targetUserId, permissionType)) {
             log.info("사용자 {}에게 이미 {} 권한이 존재합니다", targetUserId, permissionType);
