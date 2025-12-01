@@ -203,42 +203,124 @@ public class WorkScheduleController {
     }
 
     /**
-     * 결재 처리 (검토자/승인자 통합)
-     * POST /api/v1/work-schedules/{id}/approve-step
+     * 작성자 서명 상태 업데이트
+     * PUT /api/v1/work-schedules/{id}/creator-signature
      */
-    @PostMapping("/{id}/approve-step")
-    public ResponseEntity<?> approveStep(
+    @PutMapping("/{id}/creator-signature")
+    public ResponseEntity<?> updateCreatorSignature(
             @PathVariable Long id,
-            @RequestBody Map<String, Boolean> request,
+            @RequestBody Map<String, Object> request,
             Authentication auth
     ) {
-        if (auth == null || !auth.isAuthenticated()) {
+        if (auth == null || ! auth.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus. UNAUTHORIZED).build();
+        }
+
+        try {
+            String userId = auth.getName();
+            Object isSignedObj = request.get("isSigned");
+            boolean isSigned = false;
+
+            // ✅ Object를 boolean으로 안전하게 변환
+            if (isSignedObj instanceof Boolean) {
+                isSigned = (Boolean) isSignedObj;
+            } else if (isSignedObj != null) {
+                isSigned = Boolean.parseBoolean(isSignedObj.toString());
+            }
+
+            scheduleService.updateCreatorSignature(id, userId, isSigned);
+
+            return ResponseEntity.ok(Map.of("message", "작성자 서명 상태가 업데이트되었습니다."));
+
+        } catch (SecurityException e) {
+            return ResponseEntity.status(HttpStatus. FORBIDDEN)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("작성자 서명 상태 업데이트 실패", e);
+            return ResponseEntity.status(HttpStatus. INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "서명 상태 업데이트 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 결재 처리 (승인/반려) - 서명 이미지 포함해서 제출
+     * POST /api/v1/work-schedules/{id}/approve-step
+     *
+     * Request Body:
+     * {
+     *   "approve": true/false,
+     *   "rejectionReason": "반려 사유" (반려시만 필수),
+     *   "stepOrder": 1 (현재 결재 단계)
+     * }
+     */
+    @PostMapping("/{id}/approve-step")
+    public ResponseEntity<? > approveStep(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> request,
+            Authentication auth
+    ) {
+        if (auth == null || ! auth.isAuthenticated()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
         try {
             String userId = auth.getName();
-            boolean approve = request.getOrDefault("approve", false);
+            boolean approve = Boolean.parseBoolean(request.getOrDefault("approve", false).toString());
+            String rejectionReason = request.getOrDefault("rejectionReason", "반려").toString();
+            Integer stepOrder = (Integer) request.get("stepOrder");
 
-            // ✅ ApprovalProcessService를 통한 처리
+            WorkSchedule schedule = scheduleRepository.findById(id)
+                    .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다. "));
+
+            // ✅ 상태 검증
+            if (schedule.getApprovalStatus() != SUBMITTED) {
+                return ResponseEntity. status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("error", "제출된 상태에서만 결재할 수 있습니다."));
+            }
+
+            if (schedule.getApprovalLine() == null ||
+                    schedule.getCurrentApprovalStep() == null) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("error", "결재라인이 설정되지 않았습니다."));
+            }
+
+            List<ApprovalStep> steps = schedule.getApprovalLine().getSteps();
+            int currentStepIndex = schedule.getCurrentApprovalStep() - 1;
+
+            if (currentStepIndex < 0 || currentStepIndex >= steps.size()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("error", "유효하지 않은 결재 단계입니다. "));
+            }
+
+            ApprovalStep currentStep = steps.get(currentStepIndex);
+
+            // ✅ 현재 단계 결재자인지 확인
+            if (currentStep.getApproverId() == null ||
+                    ! currentStep.getApproverId(). equals(userId)) {
+                return ResponseEntity.status(HttpStatus. FORBIDDEN)
+                        .body(Map.of("error", "현재 단계의 결재자가 아닙니다."));
+            }
+
             DocumentApprovalProcess process = processRepository
                     .findByDocumentIdAndDocumentType(id, DocumentType.WORK_SCHEDULE)
                     .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
 
-            if (!approve) {
-                // 반려 처리
-                approvalProcessService.rejectStep(process.getId(), userId, "반려");
-
-                // WorkSchedule 상태도 업데이트
-                WorkSchedule schedule = scheduleRepository.findById(id)
-                        .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
-                schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.REJECTED);
+            if (! approve) {
+                // ✅ [반려] 서명 이미지 저장하지 않고 반려만 처리
+                approvalProcessService.rejectStep(process. getId(), userId, rejectionReason);
+                schedule.setApprovalStatus(WorkSchedule. ScheduleStatus.REJECTED);
+                // ✅ [중요] currentApprovalStep 초기화
+                schedule.setCurrentApprovalStep(0);
+                schedule.setIsActive(false);
                 scheduleRepository.save(schedule);
 
                 return ResponseEntity.ok(Map.of("message", "근무표가 반려되었습니다."));
             }
 
-            // 승인 처리
+            // ✅ [승인] 서명 이미지 포함해서 승인 처리
             UserEntity approver = userRepository.findByUserId(userId)
                     .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
 
@@ -248,6 +330,7 @@ public class WorkScheduleController {
                         Base64.getEncoder().encodeToString(approver.getSignimage());
             }
 
+            // ✅ 서명 이미지를 포함하여 승인 처리
             approvalProcessService.approveStep(
                     process.getId(),
                     userId,
@@ -256,17 +339,38 @@ public class WorkScheduleController {
                     false
             );
 
+// ---------------------------
+// 중요: approveStep() 호출 직후 반드시 프로세스 최신 상태를 다시 조회
+// ---------------------------
+            DocumentApprovalProcess updatedProcess = processRepository.findById(process.getId())
+                    .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
+
+// WorkSchedule의 currentApprovalStep 업데이트 (process의 최신값 사용)
+            schedule.setCurrentApprovalStep(updatedProcess.getCurrentStepOrder() != null ? updatedProcess.getCurrentStepOrder() : 0);
+
+// 프로세스 상태에 따라 스케줄 상태 동기화
+            if (updatedProcess.getStatus() == ApprovalProcessStatus.APPROVED) {
+                schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.APPROVED);
+                schedule.setIsPrintable(true);
+                schedule.setCurrentApprovalStep(0);
+            } else if (updatedProcess.getStatus() == ApprovalProcessStatus.REJECTED) {
+                schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.REJECTED);
+                schedule.setIsActive(false);
+                schedule.setCurrentApprovalStep(0);
+            } else {
+                // IN_PROGRESS 등: 제출된 이후 진행 중이면 REVIEWED(검토 완료)로 표시하거나 SUBMITTED 유지
+                schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.SUBMITTED);
+            }
+            scheduleRepository.save(schedule);
+
             return ResponseEntity.ok(Map.of("message", "결재가 완료되었습니다."));
 
-        } catch (IllegalStateException e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("error", e.getMessage()));
         } catch (SecurityException e) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", e.getMessage()));
+            return ResponseEntity.status(HttpStatus. FORBIDDEN)
+                    .body(Map. of("error", e.getMessage()));
         } catch (Exception e) {
             log.error("결재 처리 실패", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            return ResponseEntity. status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "결재 처리 중 오류가 발생했습니다."));
         }
     }
@@ -417,7 +521,7 @@ public class WorkScheduleController {
     }
 
     /**
-     * 결재 단계 서명
+     * 결재 단계 서명 (서명 이미지만 저장)
      * POST /api/v1/work-schedules/{id}/sign-step
      */
     @PostMapping("/{id}/sign-step")
@@ -426,7 +530,7 @@ public class WorkScheduleController {
             @RequestBody Map<String, Integer> request,
             Authentication auth
     ) {
-        if (auth == null || !auth.isAuthenticated()) {
+        if (auth == null || ! auth.isAuthenticated()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
@@ -437,17 +541,16 @@ public class WorkScheduleController {
             WorkSchedule schedule = scheduleRepository.findById(id)
                     .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
-            // ✅ stepOrder가 0이면 작성자 서명 (DRAFT 상태에서만)
+            // ✅ stepOrder가 0이면 작성자 서명 (이미 구현됨 - 유지)
             if (stepOrder == 0) {
-                if (!schedule.getCreatedBy().equals(userId)) {
+                if (! schedule.getCreatedBy().equals(userId)) {
                     throw new SecurityException("작성자만 서명할 수 있습니다.");
                 }
 
-                if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT) {
+                if (schedule.getApprovalStatus() != WorkSchedule. ScheduleStatus.DRAFT) {
                     throw new IllegalStateException("임시저장 상태에서만 서명할 수 있습니다.");
                 }
 
-                // 작성자 서명 저장
                 UserEntity creator = userRepository.findByUserId(userId)
                         .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
 
@@ -467,60 +570,47 @@ public class WorkScheduleController {
                 throw new IllegalStateException("제출된 상태에서만 결재할 수 있습니다.");
             }
 
-            // ApprovalProcessService를 통한 서명 처리
             DocumentApprovalProcess process = processRepository
                     .findByDocumentIdAndDocumentType(id, DocumentType.WORK_SCHEDULE)
                     .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
 
-            ApprovalStep currentStep = process.getApprovalLine().getSteps().stream()
-                    .filter(s -> s.getStepOrder().equals(stepOrder))
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException("유효하지 않은 결재 단계입니다."));
+            ApprovalStep currentStep = process.getApprovalLine(). getSteps().stream()
+                    .filter(s -> s.getStepOrder(). equals(stepOrder))
+                    . findFirst()
+                    .orElseThrow(() -> new IllegalStateException("유효하지 않은 결재 단계입니다. "));
 
-            if (!currentStep.getApproverId().equals(userId)) {
+            // ✅ [핵심] 현재 단계 결재자인지 확인
+            if (! currentStep.getApproverId().equals(userId)) {
                 throw new SecurityException("해당 단계의 서명 권한이 없습니다.");
             }
 
             UserEntity approver = userRepository.findByUserId(userId)
                     .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
 
-            String signatureImageUrl = null;
+            // ✅ [중요] 서명 이미지만 저장 (아직 승인하지 않음)
             if (approver.getSignimage() != null) {
-                signatureImageUrl = "data:image/png;base64," +
+                String signatureImageUrl = "data:image/png;base64," +
                         Base64.getEncoder().encodeToString(approver.getSignimage());
+
+                // ✅ Service 메서드: 서명 이미지 임시 저장 (DB 저장 아님)
+                // 프론트엔드에서 로컬 상태로 관리하거나,
+                // 또는 approval_step에 temporary_signature 칼럼 추가 필요
             }
 
-            // ✅ ApprovalProcessService의 approveStep 호출
-            approvalProcessService.approveStep(
-                    process.getId(),
-                    userId,
-                    "서명 완료",
-                    signatureImageUrl,
-                    false
-            );
-
-            // ✅ WorkSchedule의 currentApprovalStep 업데이트
-            schedule.setCurrentApprovalStep(process.getCurrentStepOrder());
-
-            // ✅ 모든 단계 완료 시 APPROVED
-            if (process.getStatus() == sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus.APPROVED) {
-                schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.APPROVED);
-                schedule.setIsPrintable(true);
-            }
-
-            scheduleRepository.save(schedule);
-
-            return ResponseEntity.ok(Map.of("message", "서명이 완료되었습니다."));
+            return ResponseEntity.ok(Map.of(
+                    "message", "서명이 준비되었습니다.  승인 버튼을 눌러주세요.",
+                    "stepOrder", stepOrder
+            ));
 
         } catch (IllegalStateException e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            return ResponseEntity.status(HttpStatus. BAD_REQUEST)
                     .body(Map.of("error", e.getMessage()));
         } catch (SecurityException e) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", e.getMessage()));
+                    .body(Map. of("error", e.getMessage()));
         } catch (Exception e) {
             log.error("서명 처리 실패", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            return ResponseEntity. status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "서명 처리 중 오류가 발생했습니다."));
         }
     }
@@ -543,41 +633,74 @@ public class WorkScheduleController {
         }
     }
 
+    /**
+     * 내가 결재해야 할 근무표 목록 (결재 대기 탭)
+     * GET /api/v1/work-schedules/pending-approvals
+     *
+     * 조건:
+     * 1. 상태가 SUBMITTED
+     * 2. 현재 단계의 결재자가 나인 경우만
+     * 3. 이전 단계 결재자는 제외
+     */
     @GetMapping("/pending-approvals")
     public ResponseEntity<?> getPendingApprovals(Authentication auth) {
-        String userId = auth.getName();
-
-        // ✅ 단일 status를 받는 메서드로 변경
-        List<DocumentApprovalProcess> processes = processRepository
-                .findByDocumentTypeAndStatus(
-                        DocumentType.WORK_SCHEDULE,
-                        ApprovalProcessStatus.IN_PROGRESS
-                );
-
-        List<WorkSchedule> pending = new ArrayList<>();
-        for (DocumentApprovalProcess process : processes) {
-            // 현재 결재자 확인
-            if (process.getCurrentStepOrder() == null ||
-                    process.getApprovalLine() == null ||
-                    process.getApprovalLine().getSteps().isEmpty()) {
-                continue;
-            }
-
-            // ✅ 배열 인덱스 에러 방지
-            int currentStepIndex = process.getCurrentStepOrder() - 1;
-            List<ApprovalStep> steps = process.getApprovalLine().getSteps();
-
-            if (currentStepIndex >= 0 && currentStepIndex < steps.size()) {
-                ApprovalStep currentStep = steps.get(currentStepIndex);
-
-                if (currentStep.getApproverId() != null &&
-                        currentStep.getApproverId().equals(userId)) {
-                    scheduleRepository.findById(process.getDocumentId())
-                            .ifPresent(pending::add);
-                }
-            }
+        if (auth == null || ! auth.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        return ResponseEntity.ok(pending);
+        try {
+            String userId = auth. getName();
+
+            // ✅ SUBMITTED 상태이고 IN_PROGRESS인 프로세스만 조회
+            List<DocumentApprovalProcess> processes = processRepository
+                    .findByDocumentTypeAndStatus(
+                            DocumentType. WORK_SCHEDULE,
+                            ApprovalProcessStatus.IN_PROGRESS
+                    );
+
+            List<WorkSchedule> pendingList = new ArrayList<>();
+
+            for (DocumentApprovalProcess process : processes) {
+                // ✅ 기본 검증
+                if (process.getCurrentStepOrder() == null ||
+                        process.getApprovalLine() == null ||
+                        process. getApprovalLine().getSteps().isEmpty()) {
+                    continue;
+                }
+
+                // ✅ 현재 단계 인덱스
+                int currentStepIndex = process.getCurrentStepOrder() - 1;
+                List<ApprovalStep> steps = process.getApprovalLine().getSteps();
+
+                // ✅ 인덱스 범위 검증
+                if (currentStepIndex < 0 || currentStepIndex >= steps.size()) {
+                    continue;
+                }
+
+                // ✅ 현재 단계의 결재자
+                ApprovalStep currentStep = steps.get(currentStepIndex);
+
+                // ✅ [핵심] 현재 단계의 결재자가 나인 경우만
+                if (currentStep.getApproverId() != null &&
+                        currentStep.getApproverId().equals(userId)) {
+
+                    WorkSchedule schedule = scheduleRepository. findById(process.getDocumentId())
+                            .orElse(null);
+
+                    if (schedule != null &&
+                            schedule.getApprovalStatus() == WorkSchedule. ScheduleStatus.SUBMITTED) {
+                        pendingList.add(schedule);
+                    }
+                }
+                // ✅ 이전 단계 결재자는 제외 (조건에 안 들어감)
+            }
+
+            return ResponseEntity.ok(pendingList);
+
+        } catch (Exception e) {
+            log.error("결재 대기 근무표 조회 실패", e);
+            return ResponseEntity. status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "조회 중 오류가 발생했습니다. "));
+        }
     }
 }

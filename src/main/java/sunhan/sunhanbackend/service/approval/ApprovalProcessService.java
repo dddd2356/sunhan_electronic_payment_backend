@@ -14,6 +14,7 @@ import sunhan.sunhanbackend.entity.mysql.approval.ApprovalLine;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStep;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStepHistory;
 import sunhan.sunhanbackend.entity.mysql.approval.DocumentApprovalProcess;
+import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
 import sunhan.sunhanbackend.enums.approval.ApprovalAction;
 import sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus;
@@ -24,6 +25,7 @@ import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.ApprovalLineRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.ApprovalStepHistoryRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
+import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
 import sunhan.sunhanbackend.service.NotificationService;
 
 import java.time.LocalDateTime;
@@ -42,6 +44,8 @@ public class ApprovalProcessService {
     private final NotificationService notificationService;
     private final LeaveApplicationRepository leaveApplicationRepository;
     private final ObjectMapper objectMapper;
+    private final WorkScheduleRepository scheduleRepository;
+
     /**
      * 문서 제출 시 결재 프로세스 시작
      */
@@ -341,6 +345,31 @@ public class ApprovalProcessService {
                 log.info("다음 단계로 이동: stepOrder={}, approverId={}, stepName={}",
                         nextStepOrder, nextHistoryStep.getApproverId(), nextStep.getStepName());
             }
+
+            if (process.getDocumentType() == DocumentType.WORK_SCHEDULE) {
+                WorkSchedule schedule = scheduleRepository.findById(process.getDocumentId())
+                        .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+                Integer nextStepOrder = nextStep.getStepOrder();
+
+                ApprovalStepHistory nextHistoryStep = historyRepository
+                        .findByApprovalProcessIdAndStepOrderAndAction(
+                                process.getId(),
+                                nextStepOrder,
+                                ApprovalAction.PENDING
+                        )
+                        .orElseThrow(() -> new IllegalStateException(
+                                String.format("다음 결재 단계(%d)의 대기 중인 결재자 정보를 찾을 수 없습니다.", nextStepOrder)
+                        ));
+
+                // ✅ 핵심: WorkSchedule의 currentApprovalStep 업데이트
+                schedule.setCurrentApprovalStep(nextStepOrder);
+                scheduleRepository.save(schedule);
+
+                log.info("근무표 다음 단계로 이동: scheduleId={}, stepOrder={}, approverId={}",
+                        schedule.getId(), nextStepOrder, nextHistoryStep.getApproverId());
+            }
+
         } else {
             // 모든 단계 완료
             process.setStatus(ApprovalProcessStatus.APPROVED);
@@ -359,6 +388,17 @@ public class ApprovalProcessService {
                 leaveApplicationRepository.save(application);
 
                 log.info("결재 프로세스 완료: documentId={}", process.getDocumentId());
+            }
+            if (process.getDocumentType() == DocumentType.WORK_SCHEDULE) {
+                WorkSchedule schedule = scheduleRepository.findById(process.getDocumentId())
+                        .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+                schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.APPROVED);
+                schedule.setCurrentApprovalStep(0);
+                schedule.setIsPrintable(true);
+                scheduleRepository.save(schedule);
+
+                log.info("근무표 결재 완료: scheduleId={}", schedule.getId());
             }
         }
     }

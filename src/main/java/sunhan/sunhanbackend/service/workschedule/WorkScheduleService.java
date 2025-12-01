@@ -17,6 +17,7 @@ import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleEntry;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.approval.ApprovalAction;
+import sunhan.sunhanbackend.enums.approval.ApproverType;
 import sunhan.sunhanbackend.enums.approval.DocumentType;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.ApprovalLineRepository;
@@ -53,30 +54,46 @@ public class WorkScheduleService {
      */
     @Transactional
     public WorkSchedule createSchedule(String deptCode, String yearMonth, String creatorId) {
-        // 권한 검증
-        validateDeptAccess(creatorId, deptCode);
+        UserEntity user = userRepository.findByUserId(creatorId)
+                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
 
-        // 중복 체크
-        scheduleRepository.findByDeptCodeAndScheduleYearMonth(deptCode, yearMonth)
-                .ifPresent(s -> {
-                    throw new IllegalStateException("해당 년월의 근무표가 이미 존재합니다.");
-                });
+        // 권한 검증 (기존 로직 유지)
+        if (!user.getDeptCode().equals(deptCode)) {
+            throw new SecurityException("본인 부서의 근무표만 생성할 수 있습니다.");
+        }
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(creatorId);
+        boolean hasWorkSchedulePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+        int jobLevel = Integer.parseInt(user.getJobLevel());
+        boolean isDeptHead = jobLevel == 1;
+        if (!hasWorkSchedulePermission && !isDeptHead) {
+            throw new SecurityException("근무표를 생성할 권한이 없습니다. (부서장 또는 권한자만)");
+        }
 
+        // === 활성 레코드(즉, isActive = true)만 검사 ===
+        boolean existsActive = scheduleRepository
+                .existsByDeptCodeAndScheduleYearMonthAndIsActiveTrue(deptCode, yearMonth);
+        if (existsActive) {
+            throw new IllegalStateException("해당 년월의 활성 근무표가 이미 존재합니다.");
+        }
+
+        // 새 근무표 생성 (isActive 기본 true)
         WorkSchedule schedule = new WorkSchedule();
         schedule.setDeptCode(deptCode);
         schedule.setScheduleYearMonth(yearMonth);
         schedule.setCreatedBy(creatorId);
         schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.DRAFT);
+        schedule.setIsActive(true);
 
-        WorkSchedule saved = scheduleRepository.save(schedule);
-
-        // 부서 직원들의 엔트리 자동 생성
-        createEntriesForDeptUsers(saved);
-
-        log.info("근무현황표 생성: id={}, dept={}, yearMonth={}",
-                saved.getId(), deptCode, yearMonth);
-
-        return saved;
+        try {
+            WorkSchedule saved = scheduleRepository.save(schedule);
+            // 엔트리 자동 생성
+            createEntriesForDeptUsers(saved);
+            log.info("근무현황표 생성: id={}, dept={}, yearMonth={}", saved.getId(), deptCode, yearMonth);
+            return saved;
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // 동시성으로 다른 트랜잭션이 막아 실패한 경우 안전하게 처리
+            throw new IllegalStateException("근무표 생성 중 동일한 활성 근무표가 이미 생성되었습니다. 다시 시도하세요.", ex);
+        }
     }
 
     /**
@@ -108,15 +125,12 @@ public class WorkScheduleService {
                 schedule.getId(), deptUsers.size());
     }
 
-    /**
-     * 근무표 조회 (상세 정보 포함)
-     */
     @Transactional(readOnly = true)
     public Map<String, Object> getScheduleDetail(Long scheduleId, String userId) {
         WorkSchedule schedule = scheduleRepository.findById(scheduleId)
-                .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+                .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다. "));
 
-        validateDeptAccess(userId, schedule.getDeptCode());
+        validateScheduleDetailAccess(userId, schedule);
 
         List<WorkScheduleEntry> entries = entryRepository
                 .findByWorkScheduleIdOrderByDisplayOrderAsc(scheduleId);
@@ -130,31 +144,37 @@ public class WorkScheduleService {
                     .ifPresent(u -> userMap.put(u.getUserId(), u));
         }
 
-        // ✅ 동적 결재라인 구성
+        // ✅ 동적 결재라인 구성 (Map 사용 - DTO 변경 없음)
         List<Map<String, Object>> approvalSteps = new ArrayList<>();
 
-        // 1. 작성자 정보 (결재라인 존재 여부와 상관없이 항상 추가)
-        UserEntity creator = userRepository.findByUserId(schedule.getCreatedBy()).orElse(null);
+        DocumentApprovalProcess process = null;
+        if (schedule.getApprovalLine() != null) {
+            process = processRepository.findByDocumentIdAndDocumentType(
+                    scheduleId,
+                    DocumentType.WORK_SCHEDULE
+            ).orElse(null);
+        }
+
+        // 1. 작성자 정보
+        UserEntity creator = userRepository.findByUserId(schedule.getCreatedBy()). orElse(null);
         if (creator != null) {
             Map<String, Object> creatorStep = new HashMap<>();
-            creatorStep.put("stepName", "작성"); // 혹은 "담당"
+            creatorStep.put("stepOrder", 0);                    // ✅ Map에만 추가
+            creatorStep.put("stepName", "작성");
             creatorStep.put("name", creator.getUserName());
-            creatorStep.put("approverId", creator.getUserId());
-            creatorStep.put("stepOrder", 0);  // ✅ 작성자는 항상 0
+            creatorStep. put("approverId", creator.getUserId());
             creatorStep.put("signatureUrl", schedule.getCreatorSignatureUrl());
             creatorStep.put("signedAt", schedule.getCreatorSignedAt());
             creatorStep.put("isSigned", schedule.getCreatorSignatureUrl() != null);
 
-            // ✅ DRAFT 상태이면서 아직 서명하지 않았고, 로그인한 유저가 작성자 본인일 때 서명 가능
-            boolean isCreatorAndDraft = schedule.getCreatedBy().equals(userId) &&
-                    schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.DRAFT;
-
+            boolean isCreatorAndDraft = schedule.getCreatedBy(). equals(userId) &&
+                    schedule.getApprovalStatus() == WorkSchedule. ScheduleStatus.DRAFT;
             creatorStep.put("isCurrent", isCreatorAndDraft && schedule.getCreatorSignatureUrl() == null);
 
             approvalSteps.add(creatorStep);
         }
 
-        // 2. 결재라인의 단계 추가 (결재라인이 설정된 경우에만)
+        // 2. 결재라인의 단계 추가
         if (schedule.getApprovalLine() != null) {
             List<ApprovalStep> steps = schedule.getApprovalLine().getSteps();
             Integer currentStep = schedule.getCurrentApprovalStep();
@@ -164,64 +184,81 @@ public class WorkScheduleService {
 
                 Map<String, Object> stepInfo = new HashMap<>();
 
-                // ✅ 단계 이름 동적 설정 (수정)
-                String stepName;
-                String currentApproverId = step.getApproverId();
+                // ✅ Map에만 추가 (기존 DTO는 그대로)
+                stepInfo.put("stepOrder", step.getStepOrder());
+                stepInfo. put("stepName", getStepName(step, steps));
+                stepInfo.put("approverId", step.getApproverId());
 
-                // 승인자 이름 가져오기
+                // 승인자명
                 String approverName = "-";
-                if (currentApproverId != null) {
-                    UserEntity approver = userRepository.findByUserId(currentApproverId).orElse(null);
+                if (step.getApproverId() != null) {
+                    UserEntity approver = userRepository.findByUserId(step.getApproverId()). orElse(null);
                     if (approver != null) {
                         approverName = approver.getUserName();
                     }
                 }
+                stepInfo. put("name", approverName);
 
-                // ✅ 단계 이름 결정 로직 수정
-                if (step.getStepName() != null && step.getStepName().contains("부서장")) {
-                    stepName = "부서장";
-                } else if (step.getStepOrder() == 1) {
-                    // 1번 단계 - 부서장이 0번에 있는지 확인
-                    boolean hasDeptHeadBefore = steps.stream()
-                            .anyMatch(s -> s.getStepOrder() < 1 &&
-                                    s.getStepName() != null &&
-                                    s.getStepName().contains("부서장"));
-                    stepName = hasDeptHeadBefore ? "검토" : step.getStepName();
-                } else if (step.getStepOrder() == steps.size() - 1) {
-                    // 마지막 단계는 항상 "승인"
-                    stepName = "승인";
-                } else {
-                    stepName = step.getStepName() != null ? step.getStepName() : "결재";
-                }
-
-                stepInfo.put("stepName", stepName);
-                stepInfo.put("name", approverName);
-                stepInfo.put("approverId", currentApproverId);
-                stepInfo.put("stepOrder", step.getStepOrder());
-
-                // isCurrent 로직
+                // 현재 단계 확인
                 stepInfo.put("isCurrent",
-                        schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.SUBMITTED &&
+                        schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus. SUBMITTED &&
                                 currentStep != null && currentStep.equals(step.getStepOrder())
                 );
 
-                // isSigned 로직
+                // 서명 완료 여부
                 stepInfo.put("isSigned", currentStep != null && currentStep > step.getStepOrder());
 
-                // 서명 이미지 처리
-                if (currentStep != null && currentStep > step.getStepOrder() && currentApproverId != null) {
-                    UserEntity approver = userRepository.findByUserId(currentApproverId).orElse(null);
-                    if (approver != null && approver.getSignimage() != null) {
-                        stepInfo.put("signatureUrl", "data:image/png;base64," +
-                                Base64.getEncoder().encodeToString(approver.getSignimage()));
-                    } else {
-                        stepInfo.put("signatureUrl", null);
-                    }
-                    String signedDate = getSignedDateFromHistory(scheduleId, step.getStepOrder());
-                    stepInfo.put("signedAt", signedDate);
+                // ✅ 서명 완료 여부 - History에서 확인
+                ApprovalStepHistory stepHistory = historyRepository
+                        .findByApprovalProcessIdAndStepOrderAndAction(
+                                process.getId(),
+                                step.getStepOrder(),
+                                ApprovalAction.APPROVED
+                        )
+                        .orElse(null);
+
+                boolean isSigned = stepHistory != null;
+                stepInfo.put("isSigned", isSigned);
+
+                // ✅ 서명 이미지 - History에서 가져오기
+                if (isSigned && stepHistory.getSignatureImageUrl() != null) {
+                    stepInfo.put("signatureUrl", stepHistory.getSignatureImageUrl());
+                    stepInfo.put("signedAt", stepHistory.getActionDate() != null ?
+                            stepHistory.getActionDate().toString() : null);
                 } else {
                     stepInfo.put("signatureUrl", null);
                     stepInfo.put("signedAt", null);
+                }
+
+                // ✅ process가 null인 경우 반려 정보 조회 불가
+                if (process != null) {
+                    // ✅ 반려 사유 확인
+                    ApprovalStepHistory rejectedHistory = historyRepository
+                            .findByApprovalProcessIdAndStepOrderAndAction(
+                                    process.getId(),
+                                    step.getStepOrder(),
+                                    ApprovalAction.REJECTED
+                            )
+                            .orElse(null);
+
+                    if (rejectedHistory != null) {
+                        stepInfo.put("isRejected", true);
+                        stepInfo.put("rejectionReason", rejectedHistory.getComment());
+                        stepInfo.put("rejectedAt", rejectedHistory.getActionDate() != null ?
+                                rejectedHistory.getActionDate().toString() : null);
+                        stepInfo.put("rejectedBy", rejectedHistory.getApproverName());
+                    } else {
+                        stepInfo.put("isRejected", false);
+                        stepInfo.put("rejectionReason", null);
+                        stepInfo.put("rejectedAt", null);
+                        stepInfo.put("rejectedBy", null);
+                    }
+                } else {
+                    // process가 없는 경우 기본값
+                    stepInfo.put("isRejected", false);
+                    stepInfo.put("rejectionReason", null);
+                    stepInfo.put("rejectedAt", null);
+                    stepInfo.put("rejectedBy", null);
                 }
 
                 approvalSteps.add(stepInfo);
@@ -230,14 +267,137 @@ public class WorkScheduleService {
 
         Map<String, Object> result = new HashMap<>();
         result.put("schedule", schedule);
-        result.put("entries", entries);
+        result. put("entries", entries);
         result.put("positions", positions);
         result.put("users", userMap);
-        result.put("yearMonth", schedule.getScheduleYearMonth());
+        result. put("yearMonth", schedule.getScheduleYearMonth());
         result.put("daysInMonth", getDaysInMonth(schedule.getScheduleYearMonth()));
         result.put("approvalSteps", approvalSteps);
 
         return result;
+    }
+
+    /**
+     * ✅ 단계명 결정 헬퍼 메서드
+     */
+    private String getStepName(ApprovalStep step, List<ApprovalStep> allSteps) {
+        // ✅ 부서장만 특별 처리
+        if (step.getApproverType() == ApproverType.DEPARTMENT_HEAD) {
+            return "부서장";
+        }
+
+        // ✅ 마지막 단계는 무조건 "승인"
+        if (step.getStepOrder() == allSteps.size()) {
+            return "승인";
+        }
+
+        // ✅ 마지막 바로 전 단계는 "검토"
+        if (step.getStepOrder() == allSteps.size() - 1) {
+            return "검토";
+        }
+
+        // ✅ 그 외 중간 단계
+        return "결재";
+    }
+
+    /**
+     * ✅ 서명 날짜 조회 (기존 메서드 유지)
+     */
+    private String getSignedDateFromHistory(Long scheduleId, int stepOrder) {
+        DocumentApprovalProcess process = processRepository.findByDocumentIdAndDocumentType(
+                scheduleId,
+                DocumentType.WORK_SCHEDULE
+        ). orElse(null);
+
+        if (process == null) return null;
+
+        ApprovalStepHistory history = historyRepository
+                .findByApprovalProcessIdAndStepOrderAndAction(
+                        process.getId(),
+                        stepOrder,
+                        ApprovalAction.APPROVED
+                )
+                .orElse(null);
+
+        if (history != null && history.getActionDate() != null) {
+            return history.getActionDate().toString();
+        }
+
+        return null;
+    }
+
+    /**
+     * ✅ 근무표 상세 조회 권한 검증 (최종)
+     *
+     * DRAFT: 작성자만
+     * SUBMITTED: 작성자 + 현재 단계 결재자만
+     * APPROVED: 작성자 + 같은 부서원만 (결재자 제외!)
+     * REJECTED: 작성자만
+     */
+    private void validateScheduleDetailAccess(String userId, WorkSchedule schedule) {
+        UserEntity user = userRepository.findByUserId(userId)
+                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다. "));
+
+        String userDeptCode = user.getDeptCode();
+        String scheduleDeptCode = schedule.getDeptCode();
+
+        // ✅ [1] 작성자는 모든 상태에서 조회 가능
+        if (schedule.getCreatedBy(). equals(userId)) {
+            return;
+        }
+
+        WorkSchedule.ScheduleStatus status = schedule.getApprovalStatus();
+
+        // ✅ [2] DRAFT 상태: 작성자만 (위에서 확인했으므로 거부)
+        if (status == WorkSchedule.ScheduleStatus. DRAFT) {
+            throw new SecurityException("임시저장 상태는 작성자만 조회할 수 있습니다.");
+        }
+
+        // ✅ [3] SUBMITTED 상태: 현재 단계 결재자만 추가로 가능
+        if (status == WorkSchedule.ScheduleStatus. SUBMITTED) {
+            if (isCurrentApprover(userId, schedule)) {
+                return; // 현재 단계 결재자는 조회 가능
+            }
+            throw new SecurityException("제출된 상태는 현재 결재자만 조회할 수 있습니다.");
+        }
+
+        // ✅ [4] APPROVED 상태: 같은 부서원만 (결재자 제외!)
+        if (status == WorkSchedule.ScheduleStatus. APPROVED) {
+            if (userDeptCode != null && userDeptCode.equals(scheduleDeptCode)) {
+                return; // 같은 부서원은 조회 가능
+            }
+            // ✅ 결재자는 여기서 제외 - 더 이상 조회 권한 없음
+            throw new SecurityException("완료된 근무표는 같은 부서원만 조회할 수 있습니다.");
+        }
+
+        // ✅ [5] REJECTED 상태: 작성자만
+        if (status == WorkSchedule. ScheduleStatus.REJECTED) {
+            throw new SecurityException("반려된 상태는 작성자만 조회할 수 있습니다.");
+        }
+
+        // 그 외 상태
+        throw new SecurityException("근무표를 조회할 권한이 없습니다.");
+    }
+
+    /**
+     * ✅ 현재 단계 결재자인지 확인
+     */
+    private boolean isCurrentApprover(String userId, WorkSchedule schedule) {
+        if (schedule.getApprovalLine() == null ||
+                schedule.getCurrentApprovalStep() == null) {
+            return false;
+        }
+
+        List<ApprovalStep> steps = schedule.getApprovalLine().getSteps();
+        int currentStepIndex = schedule.getCurrentApprovalStep() - 1;
+
+        if (currentStepIndex >= 0 && currentStepIndex < steps.size()) {
+            ApprovalStep currentStep = steps.get(currentStepIndex);
+            return currentStep.getApproverId() != null &&
+                    currentStep. getApproverId().equals(userId);
+        }
+
+        return false;
     }
 
     /**
@@ -274,32 +434,6 @@ public class WorkScheduleService {
         }
 
         scheduleRepository.save(schedule);
-    }
-
-    // ✅ 새 헬퍼 메서드 추가 (History에서 서명 날짜 조회)
-    private String getSignedDateFromHistory(Long scheduleId, int stepOrder) {
-        // DocumentApprovalProcess 조회
-        DocumentApprovalProcess process = processRepository.findByDocumentIdAndDocumentType(
-                scheduleId,
-                sunhan.sunhanbackend.enums.approval.DocumentType.WORK_SCHEDULE
-        ).orElse(null);
-
-        if (process == null) return null;
-
-        // ApprovalStepHistory에서 해당 단계의 서명 날짜 조회
-        ApprovalStepHistory history = historyRepository
-                .findByApprovalProcessIdAndStepOrderAndAction(
-                        process.getId(),
-                        stepOrder,
-                        ApprovalAction.APPROVED
-                )
-                .orElse(null);
-
-        if (history != null && history.getActionDate() != null) {
-            return history.getActionDate().toString();
-        }
-
-        return null;
     }
 
     @Transactional
@@ -378,8 +512,7 @@ public class WorkScheduleService {
             throw new IllegalStateException("결재라인이 설정되지 않았습니다.");
         }
 
-        // ✅ 현재 결재 단계 확인
-        if (!schedule.getCurrentApprovalStep().equals(stepOrder)) {
+        if (!Objects.equals(schedule.getCurrentApprovalStep(), stepOrder)) {
             throw new IllegalStateException("현재 결재 단계가 아닙니다.");
         }
 
@@ -390,28 +523,58 @@ public class WorkScheduleService {
 
         ApprovalStep currentStep = steps.get(stepOrder);
 
-        // ✅ 권한 확인
-        if (!currentStep.getApproverId().equals(userId)) {
+        if (!Objects.equals(currentStep.getApproverId(), userId)) {
             throw new SecurityException("해당 단계의 서명 권한이 없습니다.");
         }
 
-        // ✅ 서명 완료 처리
+        // -----------------------------
+        // 핵심: DocumentApprovalProcess 가져오기
+        // -----------------------------
+        DocumentApprovalProcess process = processRepository
+                .findByDocumentIdAndDocumentType(scheduleId, DocumentType.WORK_SCHEDULE)
+                .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
+
+        // 서명 이미지(가능하면 전달)
         UserEntity approver = userRepository.findByUserId(userId)
                 .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
 
-        // ✅ 다음 단계로 이동
-        schedule.setCurrentApprovalStep(stepOrder + 1);
+        String signatureImageUrl = null;
+        if (approver.getSignimage() != null) {
+            signatureImageUrl = "data:image/png;base64," + Base64.getEncoder().encodeToString(approver.getSignimage());
+        }
 
-        // ✅ 마지막 단계인 경우 승인 완료
-        if (schedule.getCurrentApprovalStep() >= steps.size()) {
+        // 마지막 단계 판단 (isFinalApproval)
+        boolean isFinalApproval = false;
+        Integer lastStepOrder = steps.stream()
+                .map(ApprovalStep::getStepOrder)
+                .max(Integer::compareTo)
+                .orElse(stepOrder);
+        if (Objects.equals(stepOrder, lastStepOrder)) {
+            isFinalApproval = true;
+        }
+
+        // ApprovalProcessService에 승인 요청 (이곳에서 history, process 이동, 전결 처리 등 처리)
+        approvalProcessService.approveStep(process.getId(), userId, null, signatureImageUrl, isFinalApproval);
+
+        // approveStep() 수행 후에는 process의 상태가 바뀌었을 테니 최신으로 다시 읽어 온다
+        DocumentApprovalProcess updated = processRepository.findById(process.getId())
+                .orElse(process);
+
+        // process의 currentStepOrder나 status를 기준으로 WorkSchedule 동기화
+        schedule.setCurrentApprovalStep(updated.getCurrentStepOrder()); // null일 수 있음
+        if (updated.getStatus() == sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus.APPROVED) {
             schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.APPROVED);
             schedule.setIsPrintable(true);
+        }
+        // 반대로 REJECTED일 경우도 처리 필요 (요구시)
+        if (updated.getStatus() == sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus.REJECTED) {
+            schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.REJECTED);
         }
 
         scheduleRepository.save(schedule);
 
-        log.info("서명 완료: scheduleId={}, userId={}, step={}",
-                scheduleId, userId, stepOrder);
+        log.info("근무표 서명 완료 (통합 프로세스): scheduleId={}, userId={}, stepOrder={}, processId={}",
+                scheduleId, userId, stepOrder, process.getId());
     }
 
     /**
@@ -421,11 +584,18 @@ public class WorkScheduleService {
     public void updateWorkData(Long scheduleId, String userId,
                                List<Map<String, Object>> updates) throws JsonProcessingException {
         try {
+            // 권한 및 상태 검증
             WorkSchedule schedule = scheduleRepository.findById(scheduleId)
                     .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
-            // 권한 및 상태 검증
-            validateScheduleEditable(schedule, userId);
+            // ✅ DRAFT 상태이고 작성자만 편집 가능
+            if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT) {
+                throw new IllegalStateException("임시저장 상태에서만 수정할 수 있습니다.");
+            }
+
+            if (! schedule.getCreatedBy().equals(userId)) {
+                throw new SecurityException("작성자만 근무표를 수정할 수 있습니다.");
+            }
 
             for (Map<String, Object> update : updates) {
                 Long entryId = Long.valueOf(update.get("entryId").toString());
@@ -571,20 +741,22 @@ public class WorkScheduleService {
 
         WorkSchedule schedule = entry.getWorkSchedule();
 
-        // 권한 검증
-        validateScheduleEditable(schedule, userId);
+        // ✅ DRAFT 상태 + 작성자만 수정 가능
+        if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT) {
+            throw new IllegalStateException("임시저장 상태에서만 수정할 수 있습니다.");
+        }
+
+        if (!schedule.getCreatedBy().equals(userId)) {
+            throw new SecurityException("작성자만 수정할 수 있습니다.");
+        }
 
         entry.setNightDutyRequired(requiredCount != null ? requiredCount : 0);
 
-        // 추가 개수 재계산
         int actual = entry.getNightDutyActual() != null ? entry.getNightDutyActual() : 0;
         int required = entry.getNightDutyRequired() != null ? entry.getNightDutyRequired() : 0;
         entry.setNightDutyAdditional(actual - required);
 
         entryRepository.save(entry);
-
-        log.info("의무 나이트 개수 설정: entryId={}, required={}, additional={}",
-                entryId, required, entry.getNightDutyAdditional());
     }
 
     /**

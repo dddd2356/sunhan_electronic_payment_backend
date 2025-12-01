@@ -32,6 +32,9 @@ public class WorkSchedule {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "is_active", nullable = false)
+    private Boolean isActive = true; // 활성 여부: true면 '생성 가능한(활성) 근무표', false면 아카이브된(비활성)
+
     @Column(name = "dept_code", nullable = false, length = 10)
     private String deptCode; // 부서 코드
 

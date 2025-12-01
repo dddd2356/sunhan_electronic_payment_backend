@@ -52,5 +52,6 @@ public interface WorkScheduleRepository extends JpaRepository<WorkSchedule, Long
             String createdBy,
             WorkSchedule.ScheduleStatus status
     );
-
+    boolean existsByDeptCodeAndScheduleYearMonthAndIsActiveTrue(String deptCode, String scheduleYearMonth);
+    Optional<WorkSchedule> findByDeptCodeAndScheduleYearMonthAndIsActiveTrue(String deptCode, String scheduleYearMonth);
 }
