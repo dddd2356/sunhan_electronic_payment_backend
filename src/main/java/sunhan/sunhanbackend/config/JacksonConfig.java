@@ -1,5 +1,6 @@
 package sunhan.sunhanbackend.config;
 
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.hibernate6.Hibernate6Module;
@@ -18,6 +19,7 @@ public class JacksonConfig {
             builder.modulesToInstall(new JavaTimeModule(), new Hibernate6Module());
             // ISO-8601 문자열로 직렬화 (타임스탬프로 하지 않음)
             builder.featuresToDisable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            builder.featuresToDisable(MapperFeature.REQUIRE_HANDLERS_FOR_JAVA8_TIMES);
         };
     }
 }

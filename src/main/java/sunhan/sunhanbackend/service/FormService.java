@@ -1,23 +1,27 @@
 package sunhan.sunhanbackend.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import sunhan.sunhanbackend.entity.mysql.EmploymentContract;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
+import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
+import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleEntry;
 import sunhan.sunhanbackend.enums.ContractType;
 import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
 import sunhan.sunhanbackend.util.HtmlPdfRenderer;
 import sunhan.sunhanbackend.util.LeaveApplicationPdfRenderer;
+import sunhan.sunhanbackend.util.WorkSchedulePdfRenderer;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -28,9 +32,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Base64;
-import java.util.Optional;
+import java.util.*;
 
 @Service
 @Slf4j
@@ -39,14 +43,18 @@ public class FormService {
     private final Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
     private final Path employmentUploadDir = uploadsRoot.resolve("employment_contract");
     private final Path leaveApplicationUploadDir = uploadsRoot.resolve("leave_application");
+    private final Path workScheduleUploadDir = uploadsRoot.resolve("work_schedule");
 
     private final UserRepository userRepository;
+    private final WorkScheduleRepository workScheduleRepository;
 
-    public FormService(UserRepository userRepository) {
+    @Autowired
+    private ObjectMapper objectMapper;
+    public FormService(UserRepository userRepository, WorkScheduleRepository workScheduleRepository, ObjectMapper objectMapper) {
         this.userRepository = userRepository;
+        this.workScheduleRepository = workScheduleRepository;
+        this.objectMapper = objectMapper;
     }
-
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostConstruct
     public void init() {
@@ -62,6 +70,10 @@ public class FormService {
             if (Files.notExists(leaveApplicationUploadDir)) {
                 Files.createDirectories(leaveApplicationUploadDir);
                 log.info("Created leave application upload dir: {}", leaveApplicationUploadDir);
+            }
+            if (Files.notExists(workScheduleUploadDir)) {
+                Files.createDirectories(workScheduleUploadDir);
+                log.info("Created work schedule upload dir: {}", workScheduleUploadDir);
             }
         } catch (IOException e) {
             log.error("Failed to create upload directories", e);
@@ -502,5 +514,183 @@ public class FormService {
 
         // 2) 수정된 LeaveApplicationPdfRenderer를 호출하여 PDF를 생성합니다.
         return LeaveApplicationPdfRenderer.render(jsonData);
+    }
+
+    /**
+     * WorkSchedule PDF를 생성하고 파일로 저장 후 URL 반환
+     */
+    public String saveWorkSchedulePdf(WorkSchedule schedule, Map<String, Object> scheduleDetail) {
+        String date = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String yearMonth = schedule.getScheduleYearMonth().replace("-", "");
+        String deptCode = schedule.getDeptCode();
+
+        // 폴더명: deptCode_yearMonth
+        String safeFolderName = deptCode + "_" + yearMonth;
+
+        // 근무표 루트 및 부서 폴더
+        Path workScheduleUploadDir = uploadsRoot.resolve("work_schedule").toAbsolutePath().normalize();
+        Path deptDir = workScheduleUploadDir.resolve(safeFolderName).toAbsolutePath().normalize();
+
+        try {
+            // 디렉터리 보장
+            if (Files.notExists(workScheduleUploadDir)) {
+                Files.createDirectories(workScheduleUploadDir);
+                log.info("Created workSchedule root: {}", workScheduleUploadDir);
+            }
+            if (Files.notExists(deptDir)) {
+                Files.createDirectories(deptDir);
+                log.info("Created department dir: {}", deptDir);
+            }
+
+            // ✅ 수정 1: 기존 PDF 삭제 로직 추가
+            if (schedule.getPdfUrl() != null && !schedule.getPdfUrl().isEmpty()) {
+                String oldPath = schedule.getPdfUrl().replaceFirst("^/+uploads/?", "").trim();
+                Path oldFile = uploadsRoot.resolve(oldPath).normalize();
+                try {
+                    if (Files.exists(oldFile)) {
+                        Files.delete(oldFile);
+                        log.info("기존 PDF 삭제 완료: {}", oldFile);
+                    }
+                } catch (IOException e) {
+                    log.warn("기존 PDF 삭제 실패 (무시하고 진행): {}", oldFile, e);
+                }
+            }
+
+            // ✅ 수정 2: 타임스탬프 포함 파일명 생성
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String filename = String.format("%s_%s_%s.pdf", deptCode, yearMonth, timestamp);
+            Path target = deptDir.resolve(filename).toAbsolutePath().normalize();
+
+            log.info("PDF 저장 후보 경로: {}", target);
+
+            // ----- entries 변환 (기존 로직 유지) -----
+            Object entriesObj = scheduleDetail.get("entries");
+            if (entriesObj instanceof List<?>) {
+                List<?> rawEntries = (List<?>) entriesObj;
+                List<Map<String, Object>> convertedEntries = new ArrayList<>();
+
+                for (Object item : rawEntries) {
+                    if (item instanceof WorkScheduleEntry) {
+                        WorkScheduleEntry entry = (WorkScheduleEntry) item;
+                        Map<String, Object> entryMap = new HashMap<>();
+
+                        entryMap.put("id", entry.getId());
+                        entryMap.put("userId", entry.getUserId());
+                        entryMap.put("positionId", entry.getPositionId());
+                        entryMap.put("displayOrder", entry.getDisplayOrder());
+                        entryMap.put("nightDutyRequired", entry.getNightDutyRequired());
+                        entryMap.put("nightDutyActual", entry.getNightDutyActual());
+                        entryMap.put("nightDutyAdditional", entry.getNightDutyAdditional());
+                        entryMap.put("dutyDetailJson", entry.getDutyDetailJson());
+                        entryMap.put("offCount", entry.getOffCount());
+                        entryMap.put("vacationTotal", entry.getVacationTotal());
+                        entryMap.put("vacationUsedThisMonth", entry.getVacationUsedThisMonth());
+                        entryMap.put("vacationUsedTotal", entry.getVacationUsedTotal());
+                        entryMap.put("remarks", entry.getRemarks());
+                        entryMap.put("workDataJson", entry.getWorkDataJson());
+
+                        String workDataJson = entry.getWorkDataJson();
+                        if (workDataJson != null && !workDataJson.isEmpty()) {
+                            try {
+                                Map<String, Object> workDataMap = objectMapper.readValue(
+                                        workDataJson,
+                                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}
+                                );
+                                entryMap.put("workData", workDataMap);
+                                log.info("Entry {} workData 변환 완료 - 키 개수: {}", entry.getId(), workDataMap.size());
+                            } catch (Exception e) {
+                                log.error("Entry {} workDataJson 파싱 실패: {}", entry.getId(), e.getMessage());
+                                entryMap.put("workData", new HashMap<>());
+                            }
+                        } else {
+                            entryMap.put("workData", new HashMap<>());
+                        }
+
+                        entryMap.remove("workDataJson");
+                        convertedEntries.add(entryMap);
+                    } else if (item instanceof Map) {
+                        convertedEntries.add((Map<String, Object>) item);
+                    }
+                }
+
+                scheduleDetail.put("entries", convertedEntries);
+                log.info("총 {}개의 엔트리 변환 완료", ((List<?>) scheduleDetail.get("entries")).size());
+            } else {
+                log.warn("entries가 List가 아님: type={}", entriesObj == null ? "null" : entriesObj.getClass().getName());
+            }
+
+            String scheduleRemarks = schedule.getRemarks();
+            if (scheduleRemarks != null && !scheduleRemarks.isEmpty()) {
+                scheduleDetail.put("remarks", scheduleRemarks);
+                log.info("📝 비고 데이터 포함: {}", scheduleRemarks.substring(0, Math.min(50, scheduleRemarks.length())));
+            } else {
+                scheduleDetail.put("remarks", "");
+                log.warn("⚠️ 비고 데이터 없음");
+            }
+
+            // JSON 준비
+            String jsonData = objectMapper.writeValueAsString(scheduleDetail);
+            log.info("PDF 생성용 JSON 길이: {} bytes", jsonData.length());
+            if (jsonData.length() > 500) {
+                log.info("JSON 샘플: {}", jsonData.substring(0, Math.min(500, jsonData.length())));
+            }
+
+            // 렌더링
+            byte[] pdfBytes;
+            try {
+                pdfBytes = WorkSchedulePdfRenderer.render(jsonData);
+            } catch (Exception e) {
+                log.error("WorkSchedule PDF 렌더링 실패: scheduleId={}, err={}", schedule.getId(), e.getMessage(), e);
+                throw new RuntimeException("PDF 렌더링 실패", e);
+            }
+
+            if (pdfBytes == null) {
+                log.error("WorkSchedulePdfRenderer returned null bytes for scheduleId={}", schedule.getId());
+                throw new RuntimeException("PDF 바이트가 null 입니다.");
+            }
+            log.info("생성된 PDF 바이트 길이: {}", pdfBytes.length);
+            if (pdfBytes.length == 0) {
+                log.error("생성된 PDF 바이트가 0 입니다. scheduleId={}", schedule.getId());
+                throw new RuntimeException("빈 PDF 바이트");
+            }
+
+            // 파일 쓰기 (옵션 명시)
+            try {
+                Files.write(target, pdfBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                log.info("PDF 파일 저장 성공: {}", target);
+            } catch (IOException e) {
+                log.error("PDF 파일 쓰기 실패: target={}, err={}", target, e.getMessage(), e);
+                throw new RuntimeException("PDF 파일 저장 실패", e);
+            }
+
+            // 저장 후 확인
+            try {
+                if (!Files.exists(target)) {
+                    log.error("파일이 저장되지 않았습니다 (존재하지 않음): {}", target);
+                    throw new RuntimeException("파일 저장 확인 실패");
+                }
+                long fileSize = Files.size(target);
+                log.info("저장된 PDF 파일 크기: {} bytes", fileSize);
+                if (fileSize == 0) {
+                    log.error("저장된 파일 크기가 0 입니다: {}", target);
+                    throw new RuntimeException("저장된 파일이 비어있음");
+                }
+            } catch (IOException e) {
+                log.error("저장된 파일 검사 중 오류: {}", e.getMessage(), e);
+                throw new RuntimeException("저장된 파일 검사 실패", e);
+            }
+
+            // 반환 URL 생성 (컨트롤러/클라이언트 규약 유지)
+            String encodedFolder = URLEncoder.encode(safeFolderName, StandardCharsets.UTF_8);
+            String encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8);
+            String pdfUrl = "/uploads/work_schedule/" + encodedFolder + "/" + encodedFilename;
+
+            log.info("PDF 생성 완료, 반환 URL: {}", pdfUrl);
+            return pdfUrl;
+
+        } catch (IOException e) {
+            log.error("WorkSchedule PDF 생성/저장 실패: id={}, err={}", schedule.getId(), e.getMessage(), e);
+            throw new RuntimeException("근무표 PDF 생성 실패", e);
+        }
     }
 }

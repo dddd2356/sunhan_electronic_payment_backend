@@ -14,6 +14,9 @@ public class WebConfig implements WebMvcConfigurer {
     @Value("${file.upload.leave-dir}")
     private String leaveDir;
 
+    @Value("${file.upload.work-schedule-dir}")
+    private String workScheduleDir;
+
     @Value("${file.upload.sign-dir}")
     private String signDir;
 
@@ -32,6 +35,9 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addResourceHandler("/uploads/sign_image/**")
                 .addResourceLocations(pathToFileUri(signDir));
 
+        // work-schedule
+        registry.addResourceHandler("/uploads/work_schedule/**")
+                .addResourceLocations(workScheduleDir);  // 절대 경로 (윈도우 스타일)
     }
 
     private String pathToFileUri(String path) {

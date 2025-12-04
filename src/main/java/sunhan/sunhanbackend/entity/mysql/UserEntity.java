@@ -37,6 +37,15 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     private String jobLevel;  // 역할 (사원, 원장 등) - Role 역할
     @Column(name = "deptcode")
     private String deptCode;  // 부서
+    // User(다) <-> Department(일) 관계이므로 ManyToOne을 사용합니다.
+    @ManyToOne(fetch = FetchType.LAZY) // 지연 로딩 설정
+    @JoinColumn(
+            name = "deptcode",          // UserEntity의 deptcode 컬럼을
+            referencedColumnName = "deptcode", // Department Entity의 deptcode 컬럼과 연결
+            insertable = false,         // DB에 저장할 때 JPA가 관리하지 않음 (String 필드가 관리)
+            updatable = false           // DB에 업데이트할 때 JPA가 관리하지 않음 (String 필드가 관리)
+    )
+    private Department department; // (2) 관계 매핑을 위한 Department 엔티티 필드
     private String phone;
     private String address;
     @Column(name = "detail_address")
@@ -157,5 +166,12 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
         }
 
         usedVacationDays = Math.max(0, usedVacationDays - (int) Math.ceil(days));
+    }
+
+    public String getDepartmentName() {
+        if (this.department != null) {
+            return this.department.getDeptName();
+        }
+        return null;
     }
 }

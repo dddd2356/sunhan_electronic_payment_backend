@@ -3,6 +3,7 @@ package sunhan.sunhanbackend.repository.mysql;
 import jakarta.persistence.LockModeType;
 import org.springframework.cache.annotation.Cacheable;
 
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -24,7 +25,18 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     // 단건 조회는 캐시 적용
     @Cacheable(value = "userCache", key = "#userId", condition = "#userId != null && !#userId.isEmpty()")
     Optional<UserEntity> findByUserId(String userId);
+    // department를 함께 로드하는 안전한 조회 (엔티티그래프)
+
+    @EntityGraph(attributePaths = {"department"})
+    @Query("SELECT u FROM UserEntity u WHERE u.userId = :userId")
+    Optional<UserEntity> findWithDeptByUserId(@Param("userId") String userId);
+
+    // N+1 완화용: 여러 userId를 한 번에 가져올 때 department도 함께 로드
+    @EntityGraph(attributePaths = {"department"})
+    @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds")
+    List<UserEntity> findWithDeptByUserIdIn(@Param("userIds") Collection<String> userIds);
     List<UserEntity> findByUseFlag(String useFlag);
+
     // 부서별 조회 (캐시)
     @Cacheable(value = "deptCache", key = "#deptCode")
     List<UserEntity> findByDeptCode(String deptCode);
@@ -100,4 +112,5 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
 
     //  활성 여부 + 직급 목록으로 조회
     List<UserEntity> findByUseFlagAndJobLevelIn(String useFlag, List<String> jobLevels);
+
 }

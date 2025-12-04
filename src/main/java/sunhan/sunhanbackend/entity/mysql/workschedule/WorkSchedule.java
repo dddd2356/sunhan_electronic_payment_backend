@@ -6,9 +6,12 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalLine;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 근무현황표 메인 엔티티
@@ -31,6 +34,10 @@ public class WorkSchedule {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "created_by", referencedColumnName = "id", insertable = false, updatable = false)
+    private UserEntity creator;
 
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true; // 활성 여부: true면 '생성 가능한(활성) 근무표', false면 아카이브된(비활성)
@@ -78,6 +85,10 @@ public class WorkSchedule {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @OneToMany(mappedBy = "workSchedule", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
+    @OrderBy("displayOrder ASC") // 표시 순서 보장 (선택)
+    private List<WorkScheduleEntry> entries = new ArrayList<>();
+
     /**
      * 근무현황표 상태
      */
@@ -92,5 +103,9 @@ public class WorkSchedule {
     @PreUpdate
     protected void onUpdate() {
         this.updatedAt = LocalDateTime.now();
+    }
+
+    public UserEntity getUser() {
+        return this.creator;
     }
 }

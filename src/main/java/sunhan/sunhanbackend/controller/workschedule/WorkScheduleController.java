@@ -3,7 +3,9 @@ package sunhan.sunhanbackend.controller.workschedule;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -17,10 +19,18 @@ import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleEntryRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
+import sunhan.sunhanbackend.service.PdfGenerationService;
 import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
 import sunhan.sunhanbackend.service.workschedule.WorkScheduleService;
 import sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -42,6 +52,7 @@ public class WorkScheduleController {
     private final UserRepository userRepository;
     private final WorkScheduleEntryRepository entryRepository;
     private final DocumentApprovalProcessRepository processRepository;
+    private final PdfGenerationService pdfGenerationService;
 
     /**
      * 내 부서의 근무표 목록 조회
@@ -489,15 +500,14 @@ public class WorkScheduleController {
             String userId = auth.getName();
             Long positionId = request.get("positionId");
 
-            WorkScheduleEntry entry = entryRepository.findById(entryId)
-                    .orElseThrow(() -> new EntityNotFoundException("엔트리를 찾을 수 없습니다."));
+            WorkScheduleEntry entry = entryRepository.findById(entryId).orElse(null);
+            if (entry == null) {
+                log.warn("직책 변경 요청된 엔트리 ID {}가 존재하지 않습니다. (이미 삭제됨)", entryId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("error", "엔트리를 찾을 수 없습니다. (이미 삭제되었을 수 있음)"));
+            }
 
             WorkSchedule schedule = entry.getWorkSchedule();
-
-            // ✅ 권한 검증 로직을 직접 구현
-            if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.APPROVED) {
-                throw new IllegalStateException("승인된 근무표는 수정할 수 없습니다.");
-            }
 
             if (!schedule.getCreatedBy().equals(userId)) {
                 throw new SecurityException("근무표를 수정할 권한이 없습니다.");
@@ -701,6 +711,207 @@ public class WorkScheduleController {
             log.error("결재 대기 근무표 조회 실패", e);
             return ResponseEntity. status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "조회 중 오류가 발생했습니다. "));
+        }
+    }
+
+    /**
+     * 근무표 PDF 다운로드
+     * GET /api/v1/work-schedules/{id}/pdf
+     */
+    @GetMapping("/{id}/pdf")
+    public ResponseEntity<?> downloadPdf(
+            @PathVariable Long id,
+            Authentication auth
+    ) {
+        if (auth == null || !auth.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            String userId = auth.getName();
+
+            WorkSchedule schedule = scheduleRepository.findById(id)
+                    .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+            // 권한 확인
+            if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "승인된 근무표만 다운로드할 수 있습니다."));
+            }
+
+            UserEntity user = userRepository.findByUserId(userId)
+                    .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
+
+            if (!user.getDeptCode().equals(schedule.getDeptCode())) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "같은 부서원만 다운로드할 수 있습니다."));
+            }
+
+            // ✅ 수정 3: PDF가 없거나 파일이 실제로 없으면 재생성
+            boolean needsRegeneration = false;
+
+            if (schedule.getPdfUrl() == null || schedule.getPdfUrl().isEmpty()) {
+                needsRegeneration = true;
+            } else {
+                String cleanedPath = schedule.getPdfUrl().replaceFirst("^/+uploads/?", "").trim();
+                Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
+                Path pdfPath = uploadsRoot.resolve(cleanedPath).normalize();
+
+                if (!Files.exists(pdfPath) || Files.size(pdfPath) == 0) {
+                    needsRegeneration = true;
+                    // DB 정리
+                    schedule.setPdfUrl(null);
+                    scheduleRepository.save(schedule);
+                }
+            }
+
+            if (needsRegeneration) {
+                log.info("PDF 생성 시작: scheduleId={}", id);
+                pdfGenerationService.generateWorkSchedulePdfAsync(id);
+
+                return ResponseEntity.status(HttpStatus.ACCEPTED)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of(
+                                "status", "generating",
+                                "message", "PDF 생성 중입니다. 잠시 후 다시 시도해주세요."
+                        ));
+            }
+
+            // ✅ PDF 파일 경로 확인
+            String pdfUrl = schedule.getPdfUrl();
+            String cleanedPath = pdfUrl.replaceFirst("^/+uploads/?", "").trim();
+            Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
+            Path pdfPath = uploadsRoot.resolve(cleanedPath).normalize();
+
+            log.info("PDF 다운로드 시도: scheduleId={}, path={}", id, pdfPath);
+
+            // ✅ 파일 존재 및 크기 확인
+            if (!Files.exists(pdfPath)) {
+                log.warn("PDF 파일이 아직 생성되지 않음: {}", pdfPath);
+
+                // ✅ DB 정리 후 재생성 트리거
+                schedule.setPdfUrl(null);
+                scheduleRepository.save(schedule);
+                pdfGenerationService.generateWorkSchedulePdfAsync(id);
+
+                return ResponseEntity.status(HttpStatus.ACCEPTED)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of(
+                                "status", "generating",
+                                "message", "PDF 생성 중입니다. 잠시 후 다시 시도해주세요."
+                        ));
+            }
+
+            // ✅ 파일 크기 확인 (0바이트 파일 방지)
+            long fileSize = Files.size(pdfPath);
+            if (fileSize == 0) {
+                log.error("PDF 파일이 비어있음: {}", pdfPath);
+
+                // ✅ 빈 파일 삭제 및 재생성
+                Files.deleteIfExists(pdfPath);
+                schedule.setPdfUrl(null);
+                scheduleRepository.save(schedule);
+                pdfGenerationService.generateWorkSchedulePdfAsync(id);
+
+                return ResponseEntity.status(HttpStatus.ACCEPTED)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of(
+                                "status", "generating",
+                                "message", "PDF 재생성 중입니다. 잠시 후 다시 시도해주세요."
+                        ));
+            }
+
+            // ✅ PDF 읽기
+            byte[] pdfBytes = Files.readAllBytes(pdfPath);
+            log.info("PDF 다운로드 성공: scheduleId={}, size={} bytes", id, pdfBytes.length);
+
+            // ✅ 안전한 파일명 생성
+            String safeFilename = String.format("work_schedule_%s_%s.pdf",
+                    schedule.getDeptCode(),
+                    schedule.getScheduleYearMonth().replace("-", ""));
+
+            String encodedFilename = URLEncoder.encode(safeFilename, StandardCharsets.UTF_8)
+                    .replace("+", "%20");
+
+            // ✅ 응답 헤더 설정
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_PDF);
+            headers.setContentLength(pdfBytes.length);
+            headers.set(HttpHeaders.CONTENT_DISPOSITION,
+                    "attachment; filename=\"" + safeFilename + "\"; filename*=UTF-8''" + encodedFilename);
+            headers.setCacheControl("no-cache, no-store, must-revalidate");
+            headers.setPragma("no-cache");
+            headers.setExpires(0);
+            headers.set("X-Content-Type-Options", "nosniff");
+            headers.set("ETag", String.valueOf(System.currentTimeMillis()));
+
+            return ResponseEntity.ok()
+                    .headers(headers)
+                    .body(pdfBytes);
+
+        } catch (IOException e) {
+            log.error("PDF 파일 읽기 실패: scheduleId={}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("error", "PDF 파일 읽기 실패"));
+        } catch (Exception e) {
+            log.error("근무표 PDF 다운로드 실패: scheduleId={}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("error", "PDF 다운로드 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 근무표 PDF 초기화 (수정 시 기존 PDF 무효화)
+     * DELETE /api/v1/work-schedules/{id}/pdf
+     */
+    @DeleteMapping("/{id}/pdf")
+    public ResponseEntity<?> deletePdf(
+            @PathVariable Long id,
+            Authentication auth
+    ) {
+        if (auth == null || !auth.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            String userId = auth.getName();
+            WorkSchedule schedule = scheduleRepository.findById(id)
+                    .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+            // 권한 확인
+            if (!schedule.getCreatedBy().equals(userId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "근무표를 수정할 권한이 없습니다."));
+            }
+
+            // ✅ 기존 PDF 파일 삭제
+            if (schedule.getPdfUrl() != null && !schedule.getPdfUrl().isEmpty()) {
+                String oldPath = schedule.getPdfUrl().replaceFirst("^/+uploads/?", "").trim();
+                Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
+                Path oldFile = uploadsRoot.resolve(oldPath).normalize();
+
+                try {
+                    if (Files.exists(oldFile)) {
+                        Files.delete(oldFile);
+                        log.info("기존 PDF 삭제 완료: {}", oldFile);
+                    }
+                } catch (IOException e) {
+                    log.warn("기존 PDF 삭제 실패: {}", oldFile, e);
+                }
+            }
+
+            // ✅ DB에서 PDF URL 제거
+            schedule.setPdfUrl(null);
+            scheduleRepository.save(schedule);
+
+            return ResponseEntity.ok(Map.of("message", "PDF가 초기화되었습니다."));
+
+        } catch (Exception e) {
+            log.error("PDF 삭제 실패: scheduleId={}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "PDF 삭제 중 오류가 발생했습니다."));
         }
     }
 }

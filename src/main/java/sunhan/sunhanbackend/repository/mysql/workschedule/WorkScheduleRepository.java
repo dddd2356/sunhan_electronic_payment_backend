@@ -2,8 +2,12 @@ package sunhan.sunhanbackend.repository.mysql.workschedule;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.repository.query.Param;
+import org.springframework.data.jpa.repository.Query;
 
 import java.util.List;
 import java.util.Optional;
@@ -54,4 +58,14 @@ public interface WorkScheduleRepository extends JpaRepository<WorkSchedule, Long
     );
     boolean existsByDeptCodeAndScheduleYearMonthAndIsActiveTrue(String deptCode, String scheduleYearMonth);
     Optional<WorkSchedule> findByDeptCodeAndScheduleYearMonthAndIsActiveTrue(String deptCode, String scheduleYearMonth);
+
+    /**
+     * 특정 년월, 부서, 상태로 근무표 조회
+     */
+    Optional<WorkSchedule> findByScheduleYearMonthAndDeptCodeAndApprovalStatus(
+            String scheduleYearMonth,
+            String deptCode,
+            WorkSchedule.ScheduleStatus status
+    );
+
 }

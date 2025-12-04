@@ -51,6 +51,11 @@ public class WorkScheduleEntry {
     @Column(name = "night_duty_additional")
     private Integer nightDutyAdditional = 0; // 추가 나이트 개수
 
+    // 당직 모드용 세부 카운트 (JSON)
+    @Column(name = "duty_detail_json", columnDefinition = "TEXT")
+    private String dutyDetailJson;
+    // 예: {"평일": 3, "금요일": 1, "토요일": 1, "공휴일 및 일요일": 2}
+
     @Column(name = "off_count")
     private Integer offCount = 0; // OFF 개수
 
