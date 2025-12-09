@@ -40,13 +40,15 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     // 부서별 조회 (캐시)
     @Cacheable(value = "deptCache", key = "#deptCode")
     List<UserEntity> findByDeptCode(String deptCode);
+    @EntityGraph(attributePaths = {"department"}) // 추가
     List<UserEntity> findByDeptCodeAndUseFlag(String deptCode, String useFlag);
     // 직급으로 조회 (결재자 검색용)f
     @Cacheable(value = "jobLevelUsersCache", key = "#jobLevel")
     List<UserEntity> findByJobLevel(String jobLevel);
     List<UserEntity> findByJobLevelAndDeptCode(String jobLevel, String deptCode);
     List<UserEntity> findByDeptCodeAndJobLevel(String deptCode, String jobLevel);
-
+    @Query("select u from UserEntity u left join fetch u.department where u.userId = :userId")
+    Optional<UserEntity> findByUserIdWithDepartment(@Param("userId") String userId);
     // 부서장(첫번째) 조회 (캐시) - key를 더 명확하게 수정
     @Cacheable(value = "deptManagerCache", key = "#deptCode + '_' + #jobLevel")
     Optional<UserEntity> findFirstByDeptCodeAndJobLevel(String deptCode, String jobLevel);
@@ -112,5 +114,4 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
 
     //  활성 여부 + 직급 목록으로 조회
     List<UserEntity> findByUseFlagAndJobLevelIn(String useFlag, List<String> jobLevels);
-
 }

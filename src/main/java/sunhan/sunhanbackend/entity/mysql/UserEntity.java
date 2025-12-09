@@ -1,5 +1,6 @@
 package sunhan.sunhanbackend.entity.mysql;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CacheConcurrencyStrategy;
@@ -39,6 +40,7 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     private String deptCode;  // 부서
     // User(다) <-> Department(일) 관계이므로 ManyToOne을 사용합니다.
     @ManyToOne(fetch = FetchType.LAZY) // 지연 로딩 설정
+    @JsonIgnore // 추가: 직렬화 무시
     @JoinColumn(
             name = "deptcode",          // UserEntity의 deptcode 컬럼을
             referencedColumnName = "deptcode", // Department Entity의 deptcode 컬럼과 연결
@@ -172,6 +174,10 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
         if (this.department != null) {
             return this.department.getDeptName();
         }
+        // 숫자 제외 base로 fallback
+        String baseCode = this.deptCode.replaceAll("\\d+$", "");
+        // DepartmentRepository 주입 필요하거나 서비스 호출
+        // 예: return "기본 부서 (" + baseCode + ")"; // 임시
         return null;
     }
 }

@@ -1,6 +1,7 @@
 package sunhan.sunhanbackend.service.workschedule;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +21,7 @@ import sunhan.sunhanbackend.entity.mysql.position.Position;
 import sunhan.sunhanbackend.entity.mysql.workschedule.DeptDutyConfig;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleEntry;
+import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleTemplate;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.approval.ApprovalAction;
 import sunhan.sunhanbackend.enums.approval.ApproverType;
@@ -33,6 +35,7 @@ import sunhan.sunhanbackend.repository.mysql.position.PositionRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.DeptDutyConfigRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleEntryRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
+import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleTemplateRepository;
 import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
 
@@ -59,6 +62,7 @@ public class WorkScheduleService {
     private final ApprovalProcessService approvalProcessService;
     private final DeptDutyConfigRepository dutyConfigRepository;
     private final DepartmentRepository departmentRepository;
+    private final WorkScheduleTemplateRepository templateRepository;
 
     @Value("${holiday.api.key}")
     private String holidayApiKey;
@@ -121,7 +125,9 @@ public class WorkScheduleService {
      */
     private void createEntriesForDeptUsers(WorkSchedule schedule) {
         List<UserEntity> deptUsers = userRepository.findByDeptCodeAndUseFlag(
-                schedule.getDeptCode(), "1");
+                schedule.getDeptCode(), "1").stream()
+                .filter(u -> !"1".equals(u.getJobType()))
+                .collect(Collectors.toList());
         // 이전 달 근무표 ID 조회
         Long previousScheduleId = findPreviousMonthScheduleId(
                 schedule.getScheduleYearMonth(),
@@ -159,6 +165,7 @@ public class WorkScheduleService {
         int order = 0;
         for (UserEntity user : deptUsers) {
             WorkScheduleEntry entry = new WorkScheduleEntry(schedule, user.getUserId(), order++);
+            entry.setUserName(user.getUserName());
             // 이전 달 의무 나이트 개수 가져오기
             Integer previousRequiredDuty = 0; // 기본값은 0
 
@@ -255,7 +262,7 @@ public class WorkScheduleService {
 
             // 4-1. 새로운 WorkScheduleEntry 객체 생성
             WorkScheduleEntry newEntry = new WorkScheduleEntry(schedule, userId, ++maxOrder);
-
+            newEntry.setUserName(user.getUserName());
             // 4-2. 의무 나이트 개수 설정 (이전 달 데이터 사용)
             Integer previousRequiredDuty = 0;
             if (previousScheduleId != null) {
@@ -318,24 +325,67 @@ public class WorkScheduleService {
 
         validateScheduleDetailAccess(userId, schedule);
 
+        // ✅ 삭제되지 않은 엔트리만 조회
         List<WorkScheduleEntry> entries = entryRepository
-                .findByWorkScheduleIdOrderByDisplayOrderAsc(scheduleId);
+                .findByWorkScheduleIdOrderByDisplayOrderAsc(scheduleId)
+                .stream()
+                .filter(e -> !e.getIsDeleted())
+                .collect(Collectors.toList());
 
         List<Position> positions = positionRepository
                 .findByDeptCodeAndIsActiveTrueOrderByDisplayOrderAsc(schedule.getDeptCode());
 
-        Map<String, UserEntity> userMap = new HashMap<>();
+// entries는 이미 조회된 non-deleted 엔트리 리스트
+        Set<String> userIds = entries.stream()
+                .map(WorkScheduleEntry::getUserId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+// 빈 세트인 경우 DB 조회 생략
+        Map<String, UserEntity> foundUsers = new HashMap<>();
+        if (!userIds.isEmpty()) {
+            foundUsers = userRepository.findByUserIdIn(userIds).stream()
+                    .collect(Collectors.toMap(UserEntity::getUserId, u -> u));
+        }
+
+// userMap 채우기 (프론트로 보낼 안전한 형태로 변환)
+        Map<String, Map<String, Object>> safeUserMap = new HashMap<>();
         for (WorkScheduleEntry entry : entries) {
-            userRepository.findByUserId(entry.getUserId())
-                    .ifPresent(u -> userMap.put(u.getUserId(), u));
+            String uid = entry.getUserId();
+            UserEntity u = foundUsers.get(uid);
+
+            String nameToUse = null;
+            String deptToUse = null;
+
+            if (u != null) {
+                nameToUse = u.getUserName();
+                deptToUse = u.getDeptCode();
+            } else {
+                // DB에 사용자 없으면 엔트리에 저장된 이름(또는 userId) 사용
+                nameToUse = entry.getUserName() != null ? entry.getUserName() : uid;
+            }
+
+            Map<String, Object> minimal = new HashMap<>();
+            minimal.put("userId", uid);
+            minimal.put("userName", nameToUse);
+            minimal.put("deptCode", deptToUse); // 필요 없으면 제거 가능
+
+            safeUserMap.put(uid, minimal);
         }
 
 
         // ✅ 부서명 조회 - Department 테이블에서 직접 조회
-        String deptName = departmentRepository.findById(schedule.getDeptCode())
-                .map(Department::getDeptName)
-                .orElse(schedule.getDeptCode()); // 조회 실패 시 부서코드 그대로 사용
-
+        String deptName;
+        if (schedule.getIsCustom() != null && schedule.getIsCustom()) {
+            // 커스텀 근무표인 경우 customDeptName 사용
+            deptName = schedule.getCustomDeptName();
+        } else {
+            // 일반 근무표인 경우 Department 테이블에서 조회
+            deptName = departmentRepository.findById(schedule.getDeptCode())
+                    .map(Department::getDeptName)
+                    .orElse(schedule.getDeptCode());
+        }
+        
         // ✅ 동적 결재라인 구성
         List<Map<String, Object>> approvalSteps = new ArrayList<>();
 
@@ -462,7 +512,7 @@ public class WorkScheduleService {
         result.put("schedule", schedule);
         result. put("entries", entries);
         result.put("positions", positions);
-        result.put("users", userMap);
+        result.put("users", safeUserMap);
         result. put("yearMonth", schedule.getScheduleYearMonth());
         result.put("daysInMonth", getDaysInMonth(schedule.getScheduleYearMonth()));
         result.put("approvalSteps", approvalSteps);
@@ -1205,4 +1255,211 @@ public class WorkScheduleService {
             return null;
         }
     }
+
+    // 1. 커스텀 근무표 생성
+    @Transactional
+    public WorkSchedule createCustomSchedule(
+            String yearMonth,
+            String creatorId,
+            String customDeptName,
+            List<String> memberUserIds
+    ) {
+        // 검증
+        UserEntity user = userRepository.findByUserId(creatorId)
+                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
+
+        // 권한 검증
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(creatorId);
+        boolean hasWorkSchedulePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+        int jobLevel = Integer.parseInt(user.getJobLevel());
+        boolean isDeptHead = jobLevel >= 1;
+
+        if (!hasWorkSchedulePermission && !isDeptHead) {
+            throw new SecurityException("근무표를 생성할 권한이 없습니다.");
+        }
+
+        // 커스텀 근무표 생성
+        WorkSchedule schedule = new WorkSchedule();
+        schedule.setDeptCode(user.getDeptCode()); // 생성자의 부서 코드는 유지
+        schedule.setIsCustom(true);
+        schedule.setCustomDeptName(customDeptName);
+        schedule.setScheduleYearMonth(yearMonth);
+        schedule.setCreatedBy(creatorId);
+        schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.DRAFT);
+        schedule.setIsActive(true);
+
+        WorkSchedule saved = scheduleRepository.save(schedule);
+
+        // 선택된 사용자들로 엔트리 생성
+        createCustomEntries(saved, memberUserIds);
+
+        return saved;
+    }
+
+    // 2. 커스텀 엔트리 생성
+    private void createCustomEntries(WorkSchedule schedule, List<String> memberUserIds) {
+        int order = 0;
+
+        for (String userId : memberUserIds) {
+            UserEntity user = userRepository.findByUserId(userId)
+                    .orElse(null);
+
+            if (user == null) continue;
+
+            WorkScheduleEntry entry = new WorkScheduleEntry(schedule, userId, order++);
+            entry.setDeptCode(user.getDeptCode()); // 원 소속 부서 저장
+            entry.setUserName(user.getUserName());
+            entry.setVacationTotal(user.getTotalVacationDays() != null ?
+                    user.getTotalVacationDays() : 15.0);
+            entry.setIsDeleted(false);
+
+            // 이전 달 의무 나이트 설정 (기존 로직 재사용)
+            Long previousScheduleId = findPreviousMonthScheduleId(
+                    schedule.getScheduleYearMonth(),
+                    schedule.getDeptCode()
+            );
+
+            if (previousScheduleId != null) {
+                Integer previousRequiredDuty = entryRepository
+                        .findByUserIdAndWorkScheduleId(userId, previousScheduleId)
+                        .map(prevEntry -> prevEntry.getNightDutyRequired() != null ?
+                                prevEntry.getNightDutyRequired() : 0)
+                        .orElse(0);
+                entry.setNightDutyRequired(previousRequiredDuty);
+            }
+
+            entryRepository.save(entry);
+        }
+    }
+
+    // 3. 템플릿 저장
+    @Transactional
+    public WorkScheduleTemplate saveTemplate(
+            String creatorId,
+            String templateName,
+            String customDeptName,
+            List<String> memberUserIds
+    ) {
+        WorkScheduleTemplate template = new WorkScheduleTemplate();
+        template.setCreatedBy(creatorId);
+        template.setTemplateName(templateName);
+        template.setCustomDeptName(customDeptName);
+
+        try {
+            template.setMemberIdsJson(objectMapper.writeValueAsString(memberUserIds));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("템플릿 저장 실패", e);
+        }
+
+        return templateRepository.save(template);
+    }
+
+    // 4. 템플릿 목록 조회
+    @Transactional(readOnly = true)
+    public List<WorkScheduleTemplate> getMyTemplates(String userId) {
+        return templateRepository.findByCreatedByOrderByUpdatedAtDesc(userId);
+    }
+
+    // 5. 템플릿에서 근무표 생성
+    @Transactional
+    public WorkSchedule createScheduleFromTemplate(
+            Long templateId,
+            String yearMonth,
+            String creatorId
+    ) {
+        WorkScheduleTemplate template = templateRepository
+                .findByIdAndCreatedBy(templateId, creatorId)
+                .orElseThrow(() -> new EntityNotFoundException("템플릿을 찾을 수 없습니다."));
+
+        List<String> memberIds;
+        try {
+            memberIds = objectMapper.readValue(
+                    template.getMemberIdsJson(),
+                    new TypeReference<List<String>>() {}
+            );
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("템플릿 파싱 실패", e);
+        }
+
+        return createCustomSchedule(
+                yearMonth,
+                creatorId,
+                template.getCustomDeptName(),
+                memberIds
+        );
+    }
+
+    // 6. 엔트리 추가 (기존 근무표에)
+    @Transactional
+    public void addMembersToSchedule(Long scheduleId, List<String> userIds, String requestUserId) {
+        WorkSchedule schedule = scheduleRepository.findById(scheduleId)
+                .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+        // 권한 확인
+        if (!schedule.getCreatedBy().equals(requestUserId)) {
+            throw new SecurityException("근무표를 수정할 권한이 없습니다.");
+        }
+
+        if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT &&
+                schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED) {
+            throw new IllegalStateException("현재 상태에서는 인원을 추가할 수 없습니다.");
+        }
+
+        // 기존 최대 displayOrder 조회
+        int maxOrder = entryRepository.findByWorkScheduleIdOrderByDisplayOrderAsc(scheduleId)
+                .stream()
+                .mapToInt(WorkScheduleEntry::getDisplayOrder)
+                .max()
+                .orElse(-1);
+
+        for (String userId : userIds) {
+            // 이미 존재하는 엔트리인지 확인
+            boolean exists = entryRepository.findByWorkScheduleIdOrderByDisplayOrderAsc(scheduleId)
+                    .stream()
+                    .anyMatch(e -> e.getUserId().equals(userId) && !e.getIsDeleted());
+
+            if (exists) continue;
+
+            UserEntity user = userRepository.findByUserId(userId)
+                    .orElse(null);
+            if (user == null) continue;
+
+            WorkScheduleEntry entry = new WorkScheduleEntry(schedule, userId, ++maxOrder);
+            entry.setDeptCode(user.getDeptCode());
+            entry.setUserName(user.getUserName());
+            entry.setVacationTotal(user.getTotalVacationDays() != null ?
+                    user.getTotalVacationDays() : 15.0);
+            entry.setIsDeleted(false);
+
+            entryRepository.save(entry);
+        }
+    }
+
+    // 7. 엔트리 삭제 (논리적 삭제)
+    @Transactional
+    public void removeMembersFromSchedule(Long scheduleId, List<Long> entryIds, String requestUserId) {
+        WorkSchedule schedule = scheduleRepository.findById(scheduleId)
+                .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+        if (!schedule.getCreatedBy().equals(requestUserId)) {
+            throw new SecurityException("근무표를 수정할 권한이 없습니다.");
+        }
+
+        if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT &&
+                schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED) {
+            throw new IllegalStateException("현재 상태에서는 인원을 삭제할 수 없습니다.");
+        }
+
+        for (Long entryId : entryIds) {
+            WorkScheduleEntry entry = entryRepository.findById(entryId)
+                    .orElse(null);
+
+            if (entry != null && entry.getWorkSchedule().getId().equals(scheduleId)) {
+                entry.setIsDeleted(true);
+                entryRepository.save(entry);
+            }
+        }
+    }
+
+
 }

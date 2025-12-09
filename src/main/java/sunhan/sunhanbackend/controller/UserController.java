@@ -1,11 +1,13 @@
 package sunhan.sunhanbackend.controller;
 
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -13,18 +15,22 @@ import sunhan.sunhanbackend.dto.request.UpdateProfileRequestDto;
 import sunhan.sunhanbackend.dto.response.DepartmentDto;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.service.ContractService;
 import sunhan.sunhanbackend.service.LeaveApplicationService;
 import sunhan.sunhanbackend.service.UserService;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 @Slf4j
 @RequestMapping("/api/v1/user")
 @RequiredArgsConstructor
 public class UserController {
+
+    private final UserRepository userRepository;
 
     private final UserService userService;
 
@@ -64,16 +70,18 @@ public class UserController {
 
     // 직원 정보 조회 API
     @GetMapping("/{userId}")
-    public ResponseEntity<UserEntity> getUserInfo(@PathVariable String userId) {
+    public ResponseEntity<?> getUserInfo(@PathVariable String userId, Authentication authentication) {
         try {
-            UserEntity user = userService.getUserInfo(userId);
-            if (user == null) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(null);
-            }
-            return ResponseEntity.ok(user);
+            String requester = extractUserIdFromAuthentication(authentication);
+            UserResponseDto dto = userService.getUserResponseDto(userId, requester);
+            return ResponseEntity.ok(dto);
+        } catch (AccessDeniedException ade) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("code", "NP", "message", "No Permission."));
+        } catch (EntityNotFoundException enf) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "사용자를 찾을 수 없습니다."));
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
+            log.error("getUserInfo error", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", e.getMessage()));
         }
     }
 
@@ -120,7 +128,7 @@ public class UserController {
     @GetMapping("/{userId}/signature")
     public ResponseEntity<Map<String, String>> getUserSignature(@PathVariable String userId) {
         try {
-            // ⭐ userService.getUserSignatureAsBase64() 메서드 내부 로직 확인 필요
+            // userService.getUserSignatureAsBase64() 메서드 내부 로직 확인 필요
             // 이 메서드가 UserEntity를 조회하고 signimage를 Base64로 변환해야 함
             Map<String, String> signatureData = userService.getUserSignatureAsBase64(userId);
 
@@ -309,32 +317,6 @@ public class UserController {
     }
 
     /**
-     * 내가 속한 부서의 직원 목록 조회
-     */
-    @GetMapping("/me/department-users")
-    public ResponseEntity<?> getMyDepartmentUsers(Authentication authentication) {
-        if (authentication == null || !authentication.isAuthenticated()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-
-        try {
-            String userId = (String) authentication.getPrincipal();
-            UserEntity user = userService.getUserInfo(userId);
-
-            if (!(user.isAdmin() && "1".equals(user.getJobLevel()))) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("error", "권한이 없습니다."));
-            }
-
-            List<UserEntity> deptUsers = userService.getUsersByDeptForAdmin(userId, user.getDeptCode());
-            return ResponseEntity.ok(deptUsers);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
-        }
-    }
-
-    /**
      * 📲 SMS 인증번호 전송
      * POST /api/v1/user/{userId}/send-verification
      */
@@ -391,11 +373,12 @@ public class UserController {
     }
 
     /**
-     * 특정 부서의 직원 목록 조회
+     * [기존] 권한 체크 O - 일반 부서 조회
      */
     @GetMapping("/department/{deptCode}")
     public ResponseEntity<?> getUsersByDepartment(
             @PathVariable String deptCode,
+            @RequestParam(required = false) Boolean includeSubDepts,
             Authentication authentication
     ) {
         if (authentication == null || !authentication.isAuthenticated()) {
@@ -403,16 +386,80 @@ public class UserController {
         }
 
         try {
-            // 현재 로그인 사용자
             String userId = (String) authentication.getPrincipal();
-            UserEntity currentUser = userService.getUserInfo(userId);
+            List<UserEntity> users;
 
-            // 부서 직원 조회
-            List<UserEntity> users = userService.getActiveUsersByDept(userId, deptCode);
+            if (Boolean.TRUE.equals(includeSubDepts)) {
+                // ✅ 권한 체크 O
+                users = userService.getActiveUsersByDeptPattern(userId, deptCode);
+            } else {
+                users = userService.getActiveUsersByDept(userId, deptCode);
+            }
 
-            return ResponseEntity.ok(users);
+            // DTO 변환
+            List<Map<String, Object>> response = users.stream()
+                    .map(u -> {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("userId", u.getUserId());
+                        map.put("userName", u.getUserName());
+                        map.put("jobLevel", u.getJobLevel());
+                        map.put("deptCode", u.getDeptCode());
+                        map.put("phone", u.getPhone());
+                        return map;
+                    })
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(response);
 
         } catch (Exception e) {
+            log.error("부서 직원 조회 실패: deptCode={}", deptCode, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * [신규] 권한 체크 X - 전체 부서 조회 (조직도 전용)
+     */
+    @GetMapping("/department/{deptCode}/all")
+    public ResponseEntity<?> getAllUsersByDepartment(
+            @PathVariable String deptCode,
+            @RequestParam(required = false) Boolean includeSubDepts,
+            Authentication authentication
+    ) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            List<UserEntity> users;
+
+            if (Boolean.TRUE.equals(includeSubDepts)) {
+                // ✅ 권한 체크 X
+                users = userService.getAllUsersByDeptPattern(deptCode);
+            } else {
+                users = userRepository.findByDeptCodeAndUseFlag(deptCode, "1").stream()
+                        .filter(u -> !"1".equals(u.getJobType()))
+                        .collect(Collectors.toList());
+            }
+
+            // DTO 변환 (동일)
+            List<Map<String, Object>> response = users.stream()
+                    .map(u -> {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("userId", u.getUserId());
+                        map.put("userName", u.getUserName());
+                        map.put("jobLevel", u.getJobLevel());
+                        map.put("deptCode", u.getDeptCode());
+                        map.put("phone", u.getPhone());
+                        return map;
+                    })
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("전체 부서 조회 실패: deptCode={}", deptCode, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", e.getMessage()));
         }

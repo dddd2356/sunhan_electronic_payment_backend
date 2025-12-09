@@ -3,6 +3,8 @@ package sunhan.sunhanbackend.entity.mysql;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.util.List;
+
 @Getter
 @Setter
 @NoArgsConstructor
@@ -20,4 +22,10 @@ public class Department {
 
     @Column(name = "useflag", length = 1)
     private String useFlag; // 사용 여부 (1:사용, 0:미사용)
+
+    @Transient
+    private String parentDeptCode;
+
+    @Transient
+    private List<Department> children;
 }

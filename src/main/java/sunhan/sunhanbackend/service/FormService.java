@@ -522,11 +522,15 @@ public class FormService {
     public String saveWorkSchedulePdf(WorkSchedule schedule, Map<String, Object> scheduleDetail) {
         String date = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         String yearMonth = schedule.getScheduleYearMonth().replace("-", "");
-        String deptCode = schedule.getDeptCode();
+        // ✅ 수정: 커스텀 근무표면 customDeptName 사용
+        String deptIdentifier;
+        if (schedule.getIsCustom() != null && schedule.getIsCustom()) {
+            deptIdentifier = schedule.getCustomDeptName().replaceAll("[^\\p{L}0-9_\\-\\.]", "_");
+        } else {
+            deptIdentifier = schedule.getDeptCode();
+        }
 
-        // 폴더명: deptCode_yearMonth
-        String safeFolderName = deptCode + "_" + yearMonth;
-
+        String safeFolderName = deptIdentifier + "_" + yearMonth;
         // 근무표 루트 및 부서 폴더
         Path workScheduleUploadDir = uploadsRoot.resolve("work_schedule").toAbsolutePath().normalize();
         Path deptDir = workScheduleUploadDir.resolve(safeFolderName).toAbsolutePath().normalize();
@@ -558,7 +562,7 @@ public class FormService {
 
             // ✅ 수정 2: 타임스탬프 포함 파일명 생성
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            String filename = String.format("%s_%s_%s.pdf", deptCode, yearMonth, timestamp);
+            String filename = String.format("%s_%s_%s.pdf", deptIdentifier, yearMonth, timestamp);
             Path target = deptDir.resolve(filename).toAbsolutePath().normalize();
 
             log.info("PDF 저장 후보 경로: {}", target);

@@ -5,7 +5,8 @@ import lombok.Getter;
 @Getter
 public enum ContractType {
     EMPLOYMENT_CONTRACT("근로계약서"),
-    LEAVE_APPLICATION("휴가원");
+    LEAVE_APPLICATION("휴가원"),
+    WORK_SCHEDULE("근무현황표");
 
     private final String displayName;
 

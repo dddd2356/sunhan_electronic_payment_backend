@@ -1,5 +1,6 @@
 package sunhan.sunhanbackend.controller;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +11,7 @@ import sunhan.sunhanbackend.dto.request.UpdateUserFlagRequestDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByConditionDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByUserIdDto;
 import sunhan.sunhanbackend.dto.request.permissions.UpdateJobLevelRequestDto;
+import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.provider.JwtProvider;
@@ -21,10 +23,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @RestController  // Controller 클래스에 @RestController 추가
 //@RequiredArgsConstructor  // 생성자 주입을 위한 어노테이션 추가
 @RequestMapping("/api/v1/admin")
+@Slf4j
 public class AdminController {
     private final UserService userService;  // UserService 주입
     private final UserRepository userRepository;
@@ -44,9 +48,21 @@ public class AdminController {
      */
     @GetMapping("/users")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<List<UserEntity>> getAllUsers() {
+    public ResponseEntity<List<UserResponseDto>> getAllUsers() {
         List<UserEntity> users = userService.findAllUsers();
-        return ResponseEntity.ok(users);
+        List<UserResponseDto> dtos = users.stream().map(u -> {
+            UserResponseDto dto = new UserResponseDto();
+            dto.setUserId(u.getUserId());
+            dto.setUserName(u.getUserName());
+            dto.setDeptCode(u.getDeptCode()); // 필요하면 가공
+            dto.setJobLevel(u.getJobLevel());
+            dto.setRole(u.getRole() == null ? null : u.getRole().toString());
+            dto.setUseFlag(u.getUseFlag());
+            // Department 엔티티 필드는 포함하지 않음
+            return dto;
+        }).collect(Collectors.toList());
+
+        return ResponseEntity.ok(dtos);
     }
 
     /**
@@ -280,50 +296,74 @@ public class AdminController {
     }
 
     @GetMapping("/my-department-users")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAuthority('ADMIN')") // 변경: hasRole → hasAuthority (DB role 매칭)
     public ResponseEntity<?> getMyDepartmentUsers(Authentication authentication) {
         try {
             String adminUserId = (String) authentication.getPrincipal();
-            // 1. Optional을 사용하여 사용자 정보를 안전하게 조회하고, 없으면 예외 발생
             UserEntity admin = userRepository.findByUserId(adminUserId)
-                    .orElse(null);
+                    .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
 
-            if (admin == null || !admin.isAdmin()) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("error", "권한이 없습니다."));
+            // ✅ ADMIN Role 확인 제거 (PreAuthorize로 대체, 중복 방지)
+            // if (!admin.isAdmin()) { ... } 주석 처리
+
+            int adminLevel;
+            try {
+                adminLevel = Integer.parseInt(admin.getJobLevel());
+            } catch (NumberFormatException e) {
+                log.error("JobLevel 파싱 오류: userId={}, jobLevel={}", adminUserId, admin.getJobLevel());
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(Map.of("error", "JobLevel 파싱 오류"));
             }
 
-            // 문자열을 정수로 변환하여 비교
-            int adminLevel = Integer.parseInt(admin.getJobLevel());
-            // 🔧 권한을 메서드 시작 부분에서 한 번만 조회
             Set<PermissionType> adminPermissions = permissionService.getAllUserPermissions(adminUserId);
+            List<UserEntity> users;
 
+            // ✅ jobLevel에 따른 분기 처리 (기존 유지)
             if (adminLevel == 1) {
-                // jobLevel 1인 경우 부서 내 사용자만 조회
-                List<UserEntity> deptUsers = userService.getUsersByDeptForAdmin(adminUserId, admin.getDeptCode());
-                System.out.println("Found department users: " + deptUsers.size());
-                return ResponseEntity.ok(deptUsers);
-            }else if ((adminLevel == 0 || adminLevel == 1) && adminPermissions.contains(PermissionType.MANAGE_USERS)) {
-                // jobLevel 0이면서 MANAGE_USERS 권한이 있는 경우
-                List<UserEntity> manageableUsers = userService.getManageableUsers(adminUserId);
-                System.out.println("Found manageable users: " + manageableUsers.size());
-                return ResponseEntity.ok(manageableUsers);
-            } else {
-                // 기타 경우 (jobLevel 2, 3, 4, 5 등)
-                List<UserEntity> manageableUsers = userService.getManageableUsers(adminUserId);
-                System.out.println("Found manageable users: " + manageableUsers.size());
-                return ResponseEntity.ok(manageableUsers);
+                // jobLevel 1: 자신의 부서만
+                users = userService.getUsersByDeptForAdmin(adminUserId, admin.getDeptCode());
+                log.info("부서장 {} - 부서 {} 사용자 조회: {}명", adminUserId, admin.getDeptCode(), users.size());
+            }
+            else if (adminLevel >= 2) {
+                // jobLevel 2 이상: 모든 사용자
+                users = userService.getManageableUsers(adminUserId);
+                log.info("관리자 {} (level {}) - 전체 사용자 조회: {}명", adminUserId, adminLevel, users.size());
+            }
+            else if (adminLevel == 0 && adminPermissions.contains(PermissionType.MANAGE_USERS)) {
+                // jobLevel 0 + MANAGE_USERS 권한
+                users = userService.getManageableUsers(adminUserId);
+                log.info("권한 보유 사용자 {} - 전체 사용자 조회: {}명", adminUserId, users.size());
+            }
+            else {
+                // 권한 없음
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "사용자 조회 권한이 없습니다."));
             }
 
-        } catch (NumberFormatException e) {
-            System.err.println("JobLevel 파싱 오류: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "JobLevel 파싱 오류"));
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.err.println("사용자 조회 오류: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            // 추가: DTO 변환으로 직렬화 에러 방지 (UserResponseDto 사용, deptCode base 그룹화)
+            List<UserResponseDto> dtos = users.stream()
+                    .map(u -> {
+                        UserResponseDto dto = new UserResponseDto();
+                        dto.setUserId(u.getUserId());
+                        dto.setUserName(u.getUserName());
+                        dto.setDeptCode(u.getDeptCode().replaceAll("\\d+$", "")); // base 코드 (OS1 → OS)
+                        dto.setJobLevel(u.getJobLevel());
+                        dto.setRole(u.getRole().toString()); // enum to string
+                        dto.setUseFlag(u.getUseFlag());
+                        // Department 필드 생략 (LAZY 에러 피함)
+                        return dto;
+                    }).collect(Collectors.toList());
+
+            return ResponseEntity.ok(dtos); // 변경: users → dtos 반환
+
+        } catch (RuntimeException e) { // 추가: 세부 예외 처리
+            log.error("런타임 오류: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("사용자 조회 오류: userId={}", authentication.getPrincipal(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "사용자 조회 중 오류가 발생했습니다: " + e.getMessage()));
         }
     }
 }

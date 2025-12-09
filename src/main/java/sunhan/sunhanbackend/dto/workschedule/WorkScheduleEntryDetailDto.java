@@ -30,10 +30,10 @@ public class WorkScheduleEntryDetailDto {
     private Integer offCount;
 
     // 휴가 통계
-    private Integer vacationTotal;          // 총 휴가수 (from UserEntity)
-    private Integer vacationUsedThisMonth;  // 이달 사용수 (자동 계산: "연" 개수)
-    private Integer vacationUsedTotal;      // 사용 총계 (from UserEntity)
-    private Integer vacationRemaining;      // 잔여 (total - usedTotal)
+    private Double vacationTotal;
+    private Double vacationUsedThisMonth;
+    private Double vacationUsedTotal;
+    private Double vacationRemaining;
 
     // 비고
     private String remarks;
@@ -66,7 +66,7 @@ public class WorkScheduleEntryDetailDto {
         if (vacationTotal != null && vacationUsedTotal != null) {
             this.vacationRemaining = vacationTotal - vacationUsedTotal;
         } else {
-            this.vacationRemaining = 0;
+            this.vacationRemaining = 0.0;
         }
     }
 }

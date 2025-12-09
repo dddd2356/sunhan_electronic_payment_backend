@@ -66,7 +66,8 @@ public class UserService {
     @Cacheable(value = "userCache", key = "#userId", unless = "#result == null")
     @Transactional(readOnly = true)
     public UserEntity getUserInfo(String userId) {
-        return userRepository.findByUserId(userId)
+        // fetch-join 사용: department 프록시를 트랜잭션 안에서 초기화
+        return userRepository.findByUserIdWithDepartment(userId)
                 .orElseThrow(() -> new EntityNotFoundException("User not found: " + userId));
     }
 
@@ -752,10 +753,10 @@ public class UserService {
      * 부서 코드로 직원 목록 조회
      */
     public List<UserEntity> getActiveUsersByDept(String currentUserId, String deptCode) {
-        // 필요시 현재 사용자 정보 활용 가능
-        // UserEntity currentUser = getUserInfo(currentUserId);
 
-        return userRepository.findByDeptCodeAndUseFlag(deptCode, "1"); // useFlag=1인 활성 사용자만
+        return userRepository.findByDeptCodeAndUseFlag(deptCode, "1").stream()
+                .filter(u -> !"1".equals(u.getJobType())) // ✅ jobtype=1 제외
+                .collect(Collectors.toList());
     }
 
 
@@ -793,5 +794,94 @@ public class UserService {
             log.error("권한 제거 중 오류 발생: userId={}", targetUserId, e);
             throw new RuntimeException("권한 제거 중 오류가 발생했습니다: " + e.getMessage());
         }
+    }
+
+    /**
+     * [권한 체크 O] 부서 패턴 조회
+     * 일반적인 부서 직원 조회에 사용
+     */
+    public List<UserEntity> getActiveUsersByDeptPattern(String requestUserId, String baseDeptCode) {
+        UserEntity requester = getUserInfo(requestUserId);
+        int requesterLevel = Integer.parseInt(requester.getJobLevel());
+
+        // ✅ 부서장은 자기 부서 계열만 조회 가능
+        if (requesterLevel == 1) {
+            String requesterDept = requester.getDeptCode();
+            String requesterBase = requesterDept.replaceAll("\\d+$", "");
+            String targetBase = baseDeptCode.replaceAll("\\d+$", "");
+
+            if (!requesterBase.equals(targetBase)) {
+                throw new RuntimeException("자신의 부서만 조회할 수 있습니다.");
+            }
+        }
+
+        return userRepository.findAll().stream()
+                .filter(u -> "1".equals(u.getUseFlag()))
+                .filter(u -> !"1".equals(u.getJobType()))
+                .filter(u -> {
+                    String deptCode = u.getDeptCode();
+                    if (deptCode == null) return false;
+                    return deptCode.equals(baseDeptCode) ||
+                            (deptCode.startsWith(baseDeptCode) &&
+                                    deptCode.substring(baseDeptCode.length()).matches("^\\d+$"));
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * [권한 체크 X] 전체 부서 패턴 조회
+     * 커스텀 근무표, 결재라인 생성 등에 사용
+     */
+    public List<UserEntity> getAllUsersByDeptPattern(String baseDeptCode) {
+        String base = baseDeptCode.replaceAll("\\d+$", ""); // 숫자 제외
+        return userRepository.findAll().stream()
+                .filter(u -> "1".equals(u.getUseFlag()))
+                .filter(u -> {
+                    String deptCode = u.getDeptCode();
+                    if (deptCode == null) return false;
+                    String userBase = deptCode.replaceAll("\\d+$", ""); // 사용자 deptCode도 숫자 제외
+                    return userBase.equals(base); // base로 묶음
+                })
+                .collect(Collectors.toList());
+    }
+    @Transactional(readOnly = true)
+    @Cacheable(value = "userDtoCache", key = "#targetUserId", unless = "#result == null")
+    public UserResponseDto getUserResponseDto(String targetUserId, String requesterId) {
+        UserEntity user = userRepository.findByUserIdWithDepartment(targetUserId)
+                .orElseThrow(() -> new EntityNotFoundException("User not found: " + targetUserId));
+
+        // (선택) 권한 체크: requesterId vs targetUserId
+        // if (requesterId != null && !requesterId.equals(targetUserId)) { ... 권한 검증 ... }
+
+        UserResponseDto dto = new UserResponseDto();
+        dto.setUserId(user.getUserId());
+        dto.setUserName(user.getUserName());
+        dto.setDeptCode(user.getDeptCode());
+        // dto에 deptName 필드가 있으면 아래처럼 설정 (필요 시 DTO 확장)
+        // dto.setDeptName(user.getDepartment() != null ? user.getDepartment().getDeptName() : null);
+        dto.setJobType(user.getJobType());
+        dto.setJobLevel(user.getJobLevel());
+        dto.setPhone(user.getPhone());
+        dto.setAddress(user.getAddress());
+        dto.setDetailAddress(user.getDetailAddress());
+        dto.setRole(user.getRole() != null ? user.getRole().toString() : null);
+        dto.setSignimage(null); // 권장: byte[] 대신 signature URL 제공
+        dto.setPrivacyConsent(user.getPrivacyConsent());
+        dto.setNotificationConsent(user.getNotificationConsent());
+        dto.setUseFlag(user.getUseFlag());
+
+        List<String> userPerms = permissionService.getUserPermissions(user.getUserId()).stream()
+                .map(up -> up.getPermissionType().toString())
+                .collect(Collectors.toList());
+        List<String> deptPerms = permissionService.getDeptPermissions(user.getDeptCode()).stream()
+                .map(dp -> dp.getPermissionType().toString())
+                .collect(Collectors.toList());
+        dto.setPermissions(Stream.concat(userPerms.stream(), deptPerms.stream()).distinct().collect(Collectors.toList()));
+
+        dto.setTotalVacationDays(user.getTotalVacationDays());
+        dto.setUsedVacationDays(user.getUsedVacationDays());
+        // dto.setRemainingVacationDays(...); // DTO에 필드 있으면 계산해서 넣기
+
+        return dto;
     }
 }

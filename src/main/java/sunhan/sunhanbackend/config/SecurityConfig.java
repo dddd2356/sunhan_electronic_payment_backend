@@ -67,6 +67,7 @@ public class SecurityConfig {
                                 "/api/v1/auth/**",
                                 "/api/v1/user/**",   // 사용자 정보 관련 (기존 설정 유지)
                                 "/api/user/**",      // 사용자 정보 관련 (기존 설정 유지)
+                                "/api/v1/work-schedules/**",
                                 "/practice-ui.html", // Swagger 및 API 문서
                                 "/swagger-ui.html",
                                 "/swagger-ui/**",

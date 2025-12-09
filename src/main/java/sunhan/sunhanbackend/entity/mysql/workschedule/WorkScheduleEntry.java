@@ -31,6 +31,9 @@ public class WorkScheduleEntry {
     @Column(name = "user_id", nullable = false, length = 20)
     private String userId; // 직원 ID
 
+    @Column(name = "user_name", length = 100)
+    private String userName; // 엔트리에 저장된 사용자 이름 (퇴사/이동 시에도 표시용)
+
     @Column(name = "position_id")
     private Long positionId; // 직책 ID (Position 테이블 참조)
 
@@ -71,7 +74,11 @@ public class WorkScheduleEntry {
     @Column(name = "remarks", columnDefinition = "TEXT")
     private String remarks; // 개인별 비고
 
+    @Column(name = "dept_code", length = 10)
+    private String deptCode; // 해당 직원의 원 소속 부서 (커스텀 시 필요)
 
+    @Column(name = "is_deleted", nullable = false)
+    private Boolean isDeleted = false; // 논리적 삭제 플래그 (삭제 대신 플래그 사용)
 
     public WorkScheduleEntry(WorkSchedule workSchedule, String userId, Integer displayOrder) {
         this.workSchedule = workSchedule;

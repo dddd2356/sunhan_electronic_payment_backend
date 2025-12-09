@@ -11,11 +11,14 @@ import org.springframework.web.bind.annotation.*;
 import sunhan.sunhanbackend.dto.response.VacationHistoryResponseDto;
 import sunhan.sunhanbackend.dto.response.VacationStatisticsResponseDto;
 import sunhan.sunhanbackend.dto.response.VacationStatusResponseDto;
+import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.service.VacationService;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @RestController
@@ -24,6 +27,7 @@ import java.util.Map;
 public class VacationController {
 
     private final VacationService vacationService;
+    private final UserRepository userRepository;
 
     /**
      * 특정 사용자의 휴가 사용 내역 조회
@@ -117,23 +121,33 @@ public class VacationController {
         }
     }
 
+//    /**
+//     * 현재 사용자의 휴가 현황 조회
+//     */
+//    @GetMapping("/my-status")
+//    public ResponseEntity<?> getMyVacationStatus(Authentication authentication) {
+//        if (authentication == null || !authentication.isAuthenticated()) {
+//            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+//        }
+//
+//        try {
+//            String userId = (String) authentication.getPrincipal();
+//            VacationStatusResponseDto status = vacationService.getVacationStatus(userId);
+//            return ResponseEntity.ok(status);
+//        } catch (Exception e) {
+//            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+//                    .body(Map.of("error", "휴가 현황 조회 중 오류가 발생했습니다."));
+//        }
+//    }
+
     /**
-     * 현재 사용자의 휴가 현황 조회
+     * 단일 사용자 조회 (기존 API 호환)
      */
     @GetMapping("/my-status")
-    public ResponseEntity<?> getMyVacationStatus(Authentication authentication) {
-        if (authentication == null || !authentication.isAuthenticated()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-
-        try {
-            String userId = (String) authentication.getPrincipal();
-            VacationStatusResponseDto status = vacationService.getVacationStatus(userId);
-            return ResponseEntity.ok(status);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "휴가 현황 조회 중 오류가 발생했습니다."));
-        }
+    public ResponseEntity<VacationStatusResponseDto> getMyStatus(Authentication auth) {
+        String userId = (String) auth.getPrincipal();
+        VacationStatusResponseDto status = vacationService.getVacationStatus(userId);
+        return ResponseEntity.ok(status);
     }
 
     /**
@@ -170,5 +184,24 @@ public class VacationController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("error", e.getMessage()));
         }
+    }
+    /**
+     * 부서별 조회 (관리자용 - 성능 최적화)
+     */
+    @GetMapping("/department/{deptCode}/status")
+    public ResponseEntity<List<VacationStatusResponseDto>> getDepartmentStatus(
+            @PathVariable String deptCode,
+            Authentication auth) {
+
+        // 부서 직원 목록 조회
+        List<UserEntity> deptUsers = userRepository.findByDeptCodeAndUseFlag(deptCode, "1");
+        List<String> userIds = deptUsers.stream()
+                .map(UserEntity::getUserId)
+                .collect(Collectors.toList());
+
+        // ✅ 일괄 조회 (N+1 문제 해결)
+        List<VacationStatusResponseDto> statuses = vacationService.getVacationStatusBatch(userIds);
+
+        return ResponseEntity.ok(statuses);
     }
 }

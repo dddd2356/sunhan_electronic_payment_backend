@@ -12,7 +12,7 @@ public class CacheConfig {
 
     @Bean
     public CacheManager cacheManager() {
-        return new ConcurrentMapCacheManager("userCache","userRoleCache",
+        return new ConcurrentMapCacheManager("userCache","userRoleCache", "userDtoCache",
                 "deptCache", "deptJobLevelCache","deptManagerUseFlagCache","deptUsersCache",
                 "signatureCache", "deptManagerCache","hrStaffCache", "hrStaffUseFlagCache",
                 "jobLevelCache","jobLevelUsersCache", "jobLevelUseFlagCache",

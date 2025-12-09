@@ -774,7 +774,20 @@ public class LeaveApplicationService {
         appendApprovalHistory(application, approver.getUserName() + " (전결)", approver.getJobLevel());
 
         // 저장 -> 트랜잭션 내에서 실행
-        LeaveApplication saved = leaveApplicationRepository.save(application);
+        LeaveApplication saved = leaveApplicationRepository.saveAndFlush(application);
+
+        // ✅ 연차 차감 추가 (approveWithApprovalLine과 동일한 로직)
+        if (saved.getTotalDays() != null && saved.getTotalDays() > 0) {
+            try {
+                deductVacationDaysInSameTransaction(saved.getApplicantId(), saved.getTotalDays());
+                log.info("전결 승인 시 연차 차감 완료: userId={}, days={}",
+                        saved.getApplicantId(), saved.getTotalDays());
+            } catch (Exception e) {
+                log.error("연차 차감 실패: {}", e.getMessage(), e);
+                throw new IllegalStateException("연차 차감 실패: " + e.getMessage());
+            }
+        }
+
         log.info("Saved application id={} isFinalApproved={} status={} currentStep={}",
                 saved.getId(), saved.getIsFinalApproved(), saved.getStatus(), saved.getCurrentApprovalStep());
 

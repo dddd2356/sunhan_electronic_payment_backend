@@ -14,6 +14,7 @@ import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStep;
 import sunhan.sunhanbackend.entity.mysql.approval.DocumentApprovalProcess;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleEntry;
+import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleTemplate;
 import sunhan.sunhanbackend.enums.approval.DocumentType;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
@@ -32,12 +33,9 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
-import static sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule.ScheduleStatus.REVIEWED;
 import static sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule.ScheduleStatus.SUBMITTED;
 
 @RestController
@@ -71,14 +69,39 @@ public class WorkScheduleController {
             List<WorkSchedule> schedules = scheduleRepository
                     .findByDeptCodeOrderByScheduleYearMonthDesc(user.getDeptCode());
 
-            return ResponseEntity.ok(schedules);
+            // Map으로 변환해 creatorName 추가 (프론트 WorkSchedule 필드 맞춤)
+            List<Map<String, Object>> enhancedSchedules = schedules.stream().map(s -> {
+                Map<String, Object> map = new HashMap<>();
+                map.put("id", s.getId());
+                map.put("deptCode", s.getDeptCode());
+                map.put("scheduleYearMonth", s.getScheduleYearMonth());
+                map.put("createdBy", s.getCreatedBy());
+                map.put("approvalStatus", s.getApprovalStatus());
+                map.put("remarks", s.getRemarks());
+                map.put("pdfUrl", s.getPdfUrl());
+                map.put("isPrintable", s.getIsPrintable());
+                map.put("createdAt", s.getCreatedAt());
+                map.put("updatedAt", s.getUpdatedAt());
+                map.put("creatorSignatureUrl", s.getCreatorSignatureUrl());
+                map.put("creatorSignedAt", s.getCreatorSignedAt());
+                // 다른 필드 필요 시 추가 (e.g., approvalSteps)
+                map.put("isCustom", s.getIsCustom());
+                map.put("customDeptName", s.getCustomDeptName());
+                // creatorName 조회
+                String creatorName = userRepository.findByUserId(s.getCreatedBy())
+                        .map(UserEntity::getUserName).orElse(s.getCreatedBy());
+                map.put("creatorName", creatorName);
+
+                return map;
+            }).collect(Collectors.toList());
+
+            return ResponseEntity.ok(enhancedSchedules);
         } catch (Exception e) {
             log.error("내 부서 근무표 조회 실패", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "조회 중 오류가 발생했습니다."));
         }
     }
-
     /**
      * 근무현황표 생성
      * POST /api/v1/work-schedules
@@ -912,6 +935,199 @@ public class WorkScheduleController {
             log.error("PDF 삭제 실패: scheduleId={}", id, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "PDF 삭제 중 오류가 발생했습니다."));
+        }
+    }
+
+    // 1. 커스텀 근무표 생성
+    @PostMapping("/custom")
+    public ResponseEntity<?> createCustomSchedule(
+            @RequestBody Map<String, Object> request,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+            String yearMonth = (String) request.get("yearMonth");
+            String customDeptName = (String) request.get("customDeptName");
+
+            @SuppressWarnings("unchecked")
+            List<String> memberUserIds = (List<String>) request.get("memberUserIds");
+
+            WorkSchedule schedule = scheduleService.createCustomSchedule(
+                    yearMonth, userId, customDeptName, memberUserIds);
+
+            return ResponseEntity.status(HttpStatus.CREATED).body(schedule);
+
+        } catch (Exception e) {
+            log.error("커스텀 근무표 생성 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // 2. 템플릿 저장
+    @PostMapping("/templates")
+    public ResponseEntity<?> saveTemplate(
+            @RequestBody Map<String, Object> request,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+            String templateName = (String) request.get("templateName");
+            String customDeptName = (String) request.get("customDeptName");
+
+            @SuppressWarnings("unchecked")
+            List<String> memberUserIds = (List<String>) request.get("memberUserIds");
+
+            WorkScheduleTemplate template = scheduleService.saveTemplate(
+                    userId, templateName, customDeptName, memberUserIds);
+
+            return ResponseEntity.ok(template);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // 3. 템플릿 목록 조회
+    @GetMapping("/templates")
+    public ResponseEntity<?> getMyTemplates(Authentication auth) {
+        try {
+            String userId = auth.getName();
+            List<WorkScheduleTemplate> templates = scheduleService.getMyTemplates(userId);
+            return ResponseEntity.ok(templates);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // 4. 템플릿에서 생성
+    @PostMapping("/from-template/{templateId}")
+    public ResponseEntity<?> createFromTemplate(
+            @PathVariable Long templateId,
+            @RequestBody Map<String, String> request,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+            String yearMonth = request.get("yearMonth");
+
+            WorkSchedule schedule = scheduleService.createScheduleFromTemplate(
+                    templateId, yearMonth, userId);
+
+            return ResponseEntity.status(HttpStatus.CREATED).body(schedule);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // 5. 엔트리 추가
+    @PostMapping("/{id}/members")
+    public ResponseEntity<?> addMembers(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> request,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+
+            @SuppressWarnings("unchecked")
+            List<String> userIds = (List<String>) request.get("userIds");
+
+            scheduleService.addMembersToSchedule(id, userIds, userId);
+
+            return ResponseEntity.ok(Map.of("message", "인원이 추가되었습니다."));
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // 6. 엔트리 삭제
+    @DeleteMapping("/{id}/members")
+    public ResponseEntity<?> removeMembers(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> request,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+
+            @SuppressWarnings("unchecked")
+            List<Integer> entryIdsInt = (List<Integer>) request.get("entryIds");
+            List<Long> entryIds = entryIdsInt.stream()
+                    .map(Long::valueOf)
+                    .collect(Collectors.toList());
+
+            scheduleService.removeMembersFromSchedule(id, entryIds, userId);
+
+            return ResponseEntity.ok(Map.of("message", "인원이 삭제되었습니다."));
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 내 근무표 현황 조회 (MainPage용)
+     * GET /api/v1/work-schedules/my-status
+     */
+    @GetMapping("/my-status")
+    public ResponseEntity<?> getMyWorkScheduleStatus(Authentication auth) {
+        if (auth == null || !auth.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            String userId = auth.getName();
+
+            // ✅ administrator 계정 특별 처리
+            if ("administrator".equalsIgnoreCase(userId)) {
+                log.info("Administrator 계정 - 근무표 없음");
+                return ResponseEntity.ok(Collections.emptyList());
+            }
+
+            UserEntity user = userRepository.findByUserId(userId)
+                    .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
+
+            // ✅ deptCode null 체크
+            if (user.getDeptCode() == null || user.getDeptCode().isEmpty()) {
+                log.warn("사용자 {}의 부서 코드가 없음", userId);
+                return ResponseEntity.ok(Collections.emptyList());
+            }
+
+            // 내가 속한 부서의 최근 근무표 조회
+            List<WorkSchedule> mySchedules = scheduleRepository
+                    .findByDeptCodeOrderByScheduleYearMonthDesc(user.getDeptCode())
+                    .stream()
+                    .limit(3)
+                    .collect(Collectors.toList());
+
+            // WorkScheduleStatus 형태로 변환
+            List<Map<String, Object>> statusList = mySchedules.stream()
+                    .map(schedule -> {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("id", schedule.getId());
+                        map.put("title", schedule.getScheduleYearMonth() + " 근무표");
+                        map.put("status", schedule.getApprovalStatus().toString());
+                        map.put("createdAt", schedule.getCreatedAt());
+                        map.put("updatedAt", schedule.getUpdatedAt());
+                        map.put("scheduleYearMonth", schedule.getScheduleYearMonth());
+                        return map;
+                    })
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(statusList);
+
+        } catch (Exception e) {
+            log.error("근무표 현황 조회 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "근무표 현황 조회 중 오류가 발생했습니다."));
         }
     }
 }

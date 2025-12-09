@@ -89,13 +89,18 @@ public class WorkSchedule {
     @OrderBy("displayOrder ASC") // 표시 순서 보장 (선택)
     private List<WorkScheduleEntry> entries = new ArrayList<>();
 
+    @Column(name = "is_custom", nullable = false)
+    private Boolean isCustom = false; // 커스텀 근무표 여부
+
+    @Column(name = "custom_dept_name", length = 100)
+    private String customDeptName; // 커스텀 부서명 (isCustom=true일 때 사용)
+
     /**
      * 근무현황표 상태
      */
     public enum ScheduleStatus {
         DRAFT,          // 임시저장
         SUBMITTED,      // 제출됨
-        REVIEWED,       // 검토 완료
         APPROVED,       // 승인 완료
         REJECTED        // 반려됨
     }

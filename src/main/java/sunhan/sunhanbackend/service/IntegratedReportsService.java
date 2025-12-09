@@ -269,8 +269,12 @@ public class IntegratedReportsService {
         if ("CONTRACT".equals(documentType)) {
             dto.setType(ContractType.EMPLOYMENT_CONTRACT);
             dto.setRole("EMPLOYEE");
-        } else {
+        }  else if ("LEAVE_APPLICATION".equals(documentType)) {
             dto.setType(ContractType.LEAVE_APPLICATION);
+            dto.setRole("CREATOR");
+        }   else if ("WORK_SCHEDULE".equals(documentType)) {
+            // ✅ 근무현황표 추가
+            dto.setType(ContractType.WORK_SCHEDULE);
             dto.setRole("CREATOR");
         }
 
