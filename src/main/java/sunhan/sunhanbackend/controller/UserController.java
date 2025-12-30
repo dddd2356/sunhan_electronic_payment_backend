@@ -59,7 +59,7 @@ public class UserController {
 
     @GetMapping("/all")
     public ResponseEntity<?> getAllUsers() {
-        return ResponseEntity.ok(userService.findAllUsers());
+        return ResponseEntity.ok(userService.findAllUsersAsDto());
     }
 
     // 관리자만 접근 가능한 API 예시
@@ -98,8 +98,7 @@ public class UserController {
                     requestDto.getCurrentPassword(),
                     requestDto.getNewPassword(),
                     requestDto.getPrivacyConsent(),
-                    requestDto.getNotificationConsent(),
-                    requestDto.getSmsVerificationCode()
+                    requestDto.getNotificationConsent()
             );
             return ResponseEntity.ok(updatedUser);
         } catch (ObjectOptimisticLockingFailureException e) {
@@ -313,56 +312,6 @@ public class UserController {
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "권한 확인 중 오류가 발생했습니다."));
-        }
-    }
-
-    /**
-     * 📲 SMS 인증번호 전송
-     * POST /api/v1/user/{userId}/send-verification
-     */
-    @PostMapping("/{userId}/send-verification")
-    public ResponseEntity<Map<String, Object>> sendVerificationCode(
-            @PathVariable String userId,
-            @RequestParam String phone // 전송할 핸드폰 번호
-    ) {
-        try {
-            // 인증번호 전송
-            userService.sendVerificationCode(phone, userId);
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("message", "인증번호가 전송되었습니다.");
-            response.put("phone", phone);
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            log.error("SMS 인증번호 전송 실패: userId={}, phone={}", userId, phone, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "인증번호 전송 중 오류가 발생했습니다."));
-        }
-    }
-
-    /**
-     * ✅ SMS 인증번호 검증
-     * POST /api/v1/user/{userId}/verify-code
-     */
-    @PostMapping("/{userId}/verify-code")
-    public ResponseEntity<Map<String, Object>> verifySmsCode(
-            @PathVariable String userId,
-            @RequestParam String phone,
-            @RequestParam String code
-    ) {
-        try {
-            boolean verified = userService.verifySmsCode(phone, code);
-            if (verified) {
-                return ResponseEntity.ok(Map.of("message", "인증 성공"));
-            } else {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "인증 실패 또는 코드 만료"));
-            }
-        } catch (Exception e) {
-            log.error("SMS 인증 검증 오류: userId={}, phone={}, code={}", userId, phone, code, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "인증 검증 중 오류가 발생했습니다."));
         }
     }
 

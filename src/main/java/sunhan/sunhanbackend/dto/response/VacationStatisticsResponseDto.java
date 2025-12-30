@@ -13,8 +13,8 @@ public class VacationStatisticsResponseDto {
     private String deptName;
     private Integer totalEmployees;
     private Double avgUsageRate;
-    private Integer totalVacationDays;
-    private Integer totalUsedDays;
-    private Integer totalRemainingDays;
+    private Double totalVacationDays;
+    private Double totalUsedDays;
+    private Double totalRemainingDays;
     private List<EmployeeVacationDto> employees;
 }

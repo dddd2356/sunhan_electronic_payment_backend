@@ -134,12 +134,18 @@ public class WorkSchedulePdfRenderer {
         html.append("<tr><th>서명</th>");
         for (JsonNode step : approvalSteps) {
             html.append("<td class='signature-cell'>");
-            if (step.path("isSigned").asBoolean(false)) {
-                String signatureUrl = step.path("signatureUrl").asText(null);
-                if (signatureUrl != null && !signatureUrl.isEmpty()) {
-                    html.append("<img src='").append(signatureUrl)
-                            .append("' alt='서명' style='max-width:80px;max-height:60px;'/>");
-                }
+
+            boolean isSigned = step.path("isSigned").asBoolean(false);
+            boolean isFinalApproved = step.path("isFinalApproved").asBoolean(false);
+            String signatureUrl = step.path("signatureUrl").asText(null);
+
+            if (isFinalApproved && (signatureUrl == null || signatureUrl.isEmpty())) {
+                // 전결처리된 단계인데 서명 이미지가 없으면 "전결처리!" 텍스트 출력
+                html.append("<span style='color:red; font-size:6pt; font-weight:bold;'>전결처리!</span>");
+            } else if (isSigned && signatureUrl != null && !signatureUrl.isEmpty()) {
+                // 서명 이미지 표시
+                html.append("<img src='").append(signatureUrl)
+                        .append("' alt='서명' style='max-width:80px;max-height:60px;'/>");
             }
             html.append("</td>");
         }

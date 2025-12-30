@@ -13,4 +13,5 @@ public class VacationHistoryResponseDto {
     private String reason;
     private String status;
     private String createdDate;
+    private String leaveType;
 }

@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
+import sunhan.sunhanbackend.enums.LeaveType;
 
 import java.util.List;
 import java.util.Optional;
@@ -36,7 +37,7 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
     List<LeaveApplication> findByApplicantIdAndStatus(String applicantId, LeaveApplicationStatus status);
 
     // 🔧 N+1 쿼리 문제 해결: JOIN FETCH를 명시적으로 사용하여 applicant를 한 번에 조회
-    @Query("SELECT la FROM LeaveApplication la JOIN FETCH la.applicant WHERE la.applicant.userId = :userId AND la.status = :status")
+    @Query("SELECT la FROM LeaveApplication la JOIN FETCH la.applicant WHERE la.applicant.userId = :userId AND la.status = :status ORDER BY la.createdAt DESC")
     List<LeaveApplication> findByApplicantIdAndStatusWithApplicant(@Param("userId") String userId, @Param("status") LeaveApplicationStatus status);
 
     // pending용: 이미 일부 있음, 확장
@@ -69,32 +70,5 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
             @Param("userId") String userId,
             @Param("statuses") Set<LeaveApplicationStatus> statuses,
             Pageable pageable
-    );
-
-    /**
-     * ✅ DB에서 직접 합산 (성능 개선)
-     * 기존: 모든 행 조회 → Java 합산
-     * 개선: DB에서 SUM 연산 → 결과만 반환
-     */
-    @Query("SELECT COALESCE(SUM(la.totalDays), 0.0) " +
-            "FROM LeaveApplication la " +
-            "WHERE la.applicantId = :applicantId " +
-            "AND la.status = :status")
-    Double sumTotalDaysByApplicantAndStatus(
-            @Param("applicantId") String applicantId,
-            @Param("status") LeaveApplicationStatus status
-    );
-
-    /**
-     * ✅ 여러 사용자의 연차 일괄 조회 (N+1 문제 해결)
-     */
-    @Query("SELECT la.applicantId, COALESCE(SUM(la.totalDays), 0.0) " +
-            "FROM LeaveApplication la " +
-            "WHERE la.applicantId IN :applicantIds " +
-            "AND la.status = :status " +
-            "GROUP BY la.applicantId")
-    List<Object[]> sumTotalDaysByApplicantsAndStatus(
-            @Param("applicantIds") List<String> applicantIds,
-            @Param("status") LeaveApplicationStatus status
     );
 }

@@ -34,4 +34,8 @@ public interface ReportsRepository {
     // 휴가원만 완료된 문서 조회
     List<Object[]> findCompletedLeaveApplications(String userId, boolean isAdmin, int limit, int offset);
     long countCompletedLeaveApplications(String userId, boolean isAdmin);
+
+    // 추가: Work Schedule 전용 메서드
+    List<Object[]> findCompletedWorkSchedules(String userId, boolean hasPermission, int limit, int offset);
+    long countCompletedWorkSchedules(String userId, boolean hasPermission);
 }

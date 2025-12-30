@@ -193,4 +193,23 @@ public class EmploymentContractController {
         List<ContractResponseDto> dtos = service.getCompletedContracts(userId, isAdmin);
         return ResponseEntity.ok(dtos);
     }
+
+    @PutMapping("/{id}/reject-completed")
+    public ResponseEntity<ContractResponseDto> rejectCompletedContract(
+            @PathVariable Long id,
+            @RequestBody RejectRequestDto req,
+            Authentication auth) {
+
+        String userId = auth.getName();
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(userId);
+
+        // 권한 체크: HR_CONTRACT 권한 보유자
+        boolean hasPermission = permissions.contains(PermissionType.HR_CONTRACT);
+
+        if (!hasPermission) {
+            throw new AccessDeniedException("계약서를 반려할 권한이 없습니다.");
+        }
+
+        return ResponseEntity.ok(service.rejectCompletedContract(id, userId, req.getReason()));
+    }
 }

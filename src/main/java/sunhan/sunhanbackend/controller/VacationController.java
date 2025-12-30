@@ -83,22 +83,47 @@ public class VacationController {
      * 사용자의 총 휴가일수 설정 (관리자만)
      */
     @PutMapping("/total-days/{userId}")
-    public ResponseEntity<?> setTotalVacationDays(@PathVariable String userId,
-                                                  @RequestBody Map<String, Integer> request,
-                                                  Authentication authentication) {
+    public ResponseEntity<?> setTotalVacationDays(
+            @PathVariable String userId,
+            @RequestBody Map<String, Object> request, // ✅ Object로 변경
+            Authentication authentication) {
+
         if (authentication == null || !authentication.isAuthenticated()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
         try {
             String adminUserId = (String) authentication.getPrincipal();
-            Integer totalDays = request.get("totalVacationDays");
 
-            if (totalDays == null || totalDays < 0) {
+            // ✅ Object를 Double로 안전하게 변환
+            Object totalDaysObj = request.get("totalVacationDays");
+            if (totalDaysObj == null) {
                 return ResponseEntity.badRequest()
-                        .body(Map.of("error", "올바른 휴가일수를 입력해주세요."));
+                        .body(Map.of("error", "휴가일수를 입력해주세요."));
             }
 
+            Double totalDays;
+            try {
+                if (totalDaysObj instanceof Integer) {
+                    totalDays = ((Integer) totalDaysObj).doubleValue();
+                } else if (totalDaysObj instanceof Double) {
+                    totalDays = (Double) totalDaysObj;
+                } else if (totalDaysObj instanceof Number) {
+                    totalDays = ((Number) totalDaysObj).doubleValue();
+                } else {
+                    totalDays = Double.parseDouble(totalDaysObj.toString());
+                }
+            } catch (NumberFormatException e) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "올바른 숫자 형식이 아닙니다."));
+            }
+
+            if (totalDays < 0) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "휴가일수는 0보다 커야 합니다."));
+            }
+
+            // ✅ Double 타입으로 서비스 호출
             vacationService.setTotalVacationDays(adminUserId, userId, totalDays);
 
             Map<String, Object> response = new HashMap<>();
@@ -107,38 +132,19 @@ public class VacationController {
             response.put("totalVacationDays", totalDays);
 
             return ResponseEntity.ok(response);
+
         } catch (ObjectOptimisticLockingFailureException e) {
-            // 동시성 충돌 발생 시 409 Conflict 반환
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "다른 사용자가 동시에 정보를 수정했습니다. 새로고침 후 다시 시도해주세요."));
         } catch (RuntimeException e) {
-            // 권한 문제 등 그 외 RuntimeException은 403 Forbidden 반환
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
+            log.error("휴가일수 설정 실패: userId={}, totalDays={}", userId, request.get("totalVacationDays"), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "휴가일수 설정 중 오류가 발생했습니다."));
         }
     }
-
-//    /**
-//     * 현재 사용자의 휴가 현황 조회
-//     */
-//    @GetMapping("/my-status")
-//    public ResponseEntity<?> getMyVacationStatus(Authentication authentication) {
-//        if (authentication == null || !authentication.isAuthenticated()) {
-//            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-//        }
-//
-//        try {
-//            String userId = (String) authentication.getPrincipal();
-//            VacationStatusResponseDto status = vacationService.getVacationStatus(userId);
-//            return ResponseEntity.ok(status);
-//        } catch (Exception e) {
-//            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-//                    .body(Map.of("error", "휴가 현황 조회 중 오류가 발생했습니다."));
-//        }
-//    }
 
     /**
      * 단일 사용자 조회 (기존 API 호환)

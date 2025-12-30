@@ -29,6 +29,7 @@ public class LeaveApplicationResponseDto {
     private String applicantId;
     private String applicantName;
     private String applicantDept;
+    private String applicantDeptName;
     private String applicantPosition;
     private String applicantContact;
     private String applicantPhone;

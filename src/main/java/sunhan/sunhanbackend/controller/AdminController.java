@@ -2,6 +2,8 @@ package sunhan.sunhanbackend.controller;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -11,11 +13,17 @@ import sunhan.sunhanbackend.dto.request.UpdateUserFlagRequestDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByConditionDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByUserIdDto;
 import sunhan.sunhanbackend.dto.request.permissions.UpdateJobLevelRequestDto;
+import sunhan.sunhanbackend.dto.response.AdminStatsDto;
+import sunhan.sunhanbackend.dto.response.UserListResponseDto;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
+import sunhan.sunhanbackend.enums.LeaveType;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.provider.JwtProvider;
+import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
+import sunhan.sunhanbackend.service.LeaveApplicationService;
 import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.UserService;
 
@@ -26,7 +34,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @RestController  // Controller 클래스에 @RestController 추가
-//@RequiredArgsConstructor  // 생성자 주입을 위한 어노테이션 추가
 @RequestMapping("/api/v1/admin")
 @Slf4j
 public class AdminController {
@@ -34,31 +41,43 @@ public class AdminController {
     private final UserRepository userRepository;
     private final JwtProvider jwtProvider;  // JwtProvider 변수 선언
     private final PermissionService permissionService;
+    private final LeaveApplicationRepository leaveApplicationRepository;
 
     @Autowired
-    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider, PermissionService permissionService) {
+    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider, PermissionService permissionService, LeaveApplicationRepository leaveApplicationRepository) {
         this.userService = userService;
         this.userRepository = userRepository;  // 생성자 주입
         this.jwtProvider = jwtProvider;
         this.permissionService = permissionService;
+        this.leaveApplicationRepository = leaveApplicationRepository;
     }
 
     /**
-     * 모든 사용자 조회 (기존)
+     * 모든 사용자 조회 (휴가 정보 포함)
      */
     @GetMapping("/users")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<List<UserResponseDto>> getAllUsers() {
         List<UserEntity> users = userService.findAllUsers();
+
+        // ✅ UserEntity에서 직접 가져오기
         List<UserResponseDto> dtos = users.stream().map(u -> {
             UserResponseDto dto = new UserResponseDto();
             dto.setUserId(u.getUserId());
             dto.setUserName(u.getUserName());
-            dto.setDeptCode(u.getDeptCode()); // 필요하면 가공
+            dto.setDeptCode(u.getDeptCode());
             dto.setJobLevel(u.getJobLevel());
             dto.setRole(u.getRole() == null ? null : u.getRole().toString());
             dto.setUseFlag(u.getUseFlag());
-            // Department 엔티티 필드는 포함하지 않음
+
+            // ✅ DB에 저장된 값 사용
+            Double totalDays = u.getTotalVacationDays() != null ? u.getTotalVacationDays() : 15.0;
+            Double usedDays = u.getUsedVacationDays() != null ? u.getUsedVacationDays() : 0.0;
+
+            dto.setTotalVacationDays(totalDays);
+            dto.setUsedVacationDays(usedDays);
+            dto.setRemainingVacationDays(totalDays - usedDays);
+
             return dto;
         }).collect(Collectors.toList());
 
@@ -295,75 +314,197 @@ public class AdminController {
         }
     }
 
+//    @GetMapping("/my-department-users")
+//    @PreAuthorize("hasAuthority('ADMIN')") // 변경: hasRole → hasAuthority (DB role 매칭)
+//    public ResponseEntity<?> getMyDepartmentUsers(Authentication authentication) {
+//        try {
+//            String adminUserId = (String) authentication.getPrincipal();
+//            UserEntity admin = userRepository.findByUserId(adminUserId)
+//                    .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+//
+//            // ✅ ADMIN Role 확인 제거 (PreAuthorize로 대체, 중복 방지)
+//            // if (!admin.isAdmin()) { ... } 주석 처리
+//
+//            int adminLevel;
+//            try {
+//                adminLevel = Integer.parseInt(admin.getJobLevel());
+//            } catch (NumberFormatException e) {
+//                log.error("JobLevel 파싱 오류: userId={}, jobLevel={}", adminUserId, admin.getJobLevel());
+//                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+//                        .body(Map.of("error", "JobLevel 파싱 오류"));
+//            }
+//
+//            Set<PermissionType> adminPermissions = permissionService.getAllUserPermissions(adminUserId);
+//            List<UserEntity> users;
+//
+//            // ✅ jobLevel에 따른 분기 처리 (기존 유지)
+//            if (adminLevel == 1) {
+//                // jobLevel 1: 자신의 부서만
+//                users = userService.getUsersByDeptForAdmin(adminUserId, admin.getDeptCode());
+//                log.info("부서장 {} - 부서 {} 사용자 조회: {}명", adminUserId, admin.getDeptCode(), users.size());
+//            }
+//            else if (adminLevel >= 2) {
+//                // jobLevel 2 이상: 모든 사용자
+//                users = userService.getManageableUsers(adminUserId);
+//                log.info("관리자 {} (level {}) - 전체 사용자 조회: {}명", adminUserId, adminLevel, users.size());
+//            }
+//            else if (adminLevel == 0 && adminPermissions.contains(PermissionType.MANAGE_USERS)) {
+//                // jobLevel 0 + MANAGE_USERS 권한
+//                users = userService.getManageableUsers(adminUserId);
+//                log.info("권한 보유 사용자 {} - 전체 사용자 조회: {}명", adminUserId, users.size());
+//            }
+//            else {
+//                // 권한 없음
+//                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+//                        .body(Map.of("error", "사용자 조회 권한이 없습니다."));
+//            }
+//
+//            // 추가: DTO 변환으로 직렬화 에러 방지 (UserResponseDto 사용, deptCode base 그룹화)
+//            List<UserResponseDto> dtos = users.stream()
+//                    .map(u -> {
+//                        UserResponseDto dto = new UserResponseDto();
+//                        dto.setUserId(u.getUserId());
+//                        dto.setUserName(u.getUserName());
+//                        dto.setDeptCode(u.getDeptCode().replaceAll("\\d+$", "")); // base 코드 (OS1 → OS)
+//                        dto.setJobLevel(u.getJobLevel());
+//                        dto.setRole(u.getRole().toString()); // enum to string
+//                        dto.setUseFlag(u.getUseFlag());
+//                        // Department 필드 생략 (LAZY 에러 피함)
+//                        return dto;
+//                    }).collect(Collectors.toList());
+//
+//            return ResponseEntity.ok(dtos); // 변경: users → dtos 반환
+//
+//        } catch (RuntimeException e) { // 추가: 세부 예외 처리
+//            log.error("런타임 오류: {}", e.getMessage());
+//            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+//                    .body(Map.of("error", e.getMessage()));
+//        } catch (Exception e) {
+//            log.error("사용자 조회 오류: userId={}", authentication.getPrincipal(), e);
+//            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+//                    .body(Map.of("error", "사용자 조회 중 오류가 발생했습니다: " + e.getMessage()));
+//        }
+//    }
+
+    /**
+     * 💡 [PAGING] 사용자 목록 조회 (Admin 전용) - 페이지네이션 적용
+     * GET /api/v1/admin/my-department-users?page=0&size=15&showAll=false&searchTerm=
+     */
     @GetMapping("/my-department-users")
-    @PreAuthorize("hasAuthority('ADMIN')") // 변경: hasRole → hasAuthority (DB role 매칭)
-    public ResponseEntity<?> getMyDepartmentUsers(Authentication authentication) {
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> getAllUsersByAdmin(
+            Authentication authentication,
+            @RequestParam(defaultValue = "0") int page, // 💡 페이지 번호
+            @RequestParam(defaultValue = "10") int size, // 💡 페이지 크기
+            @RequestParam(defaultValue = "false") boolean showAll, // 💡 활성/비활성 토글
+            @RequestParam(required = false) String searchTerm // 💡 검색어
+    ) {
         try {
             String adminUserId = (String) authentication.getPrincipal();
+
+            // ✅ 추가: 관리자 정보 조회
             UserEntity admin = userRepository.findByUserId(adminUserId)
-                    .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+                    .orElseThrow(() -> new RuntimeException("관리자를 찾을 수 없습니다."));
 
-            // ✅ ADMIN Role 확인 제거 (PreAuthorize로 대체, 중복 방지)
-            // if (!admin.isAdmin()) { ... } 주석 처리
+            int adminLevel = Integer.parseInt(admin.getJobLevel());
 
-            int adminLevel;
-            try {
-                adminLevel = Integer.parseInt(admin.getJobLevel());
-            } catch (NumberFormatException e) {
-                log.error("JobLevel 파싱 오류: userId={}, jobLevel={}", adminUserId, admin.getJobLevel());
-                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                        .body(Map.of("error", "JobLevel 파싱 오류"));
-            }
+            // ✅ 추가: jobLevel에 따른 사용자 목록 필터링
+            Pageable pageable = PageRequest.of(page, size);
+            UserListResponseDto pagedUsers;
 
-            Set<PermissionType> adminPermissions = permissionService.getAllUserPermissions(adminUserId);
-            List<UserEntity> users;
-
-            // ✅ jobLevel에 따른 분기 처리 (기존 유지)
             if (adminLevel == 1) {
-                // jobLevel 1: 자신의 부서만
-                users = userService.getUsersByDeptForAdmin(adminUserId, admin.getDeptCode());
-                log.info("부서장 {} - 부서 {} 사용자 조회: {}명", adminUserId, admin.getDeptCode(), users.size());
-            }
-            else if (adminLevel >= 2) {
-                // jobLevel 2 이상: 모든 사용자
-                users = userService.getManageableUsers(adminUserId);
-                log.info("관리자 {} (level {}) - 전체 사용자 조회: {}명", adminUserId, adminLevel, users.size());
-            }
-            else if (adminLevel == 0 && adminPermissions.contains(PermissionType.MANAGE_USERS)) {
-                // jobLevel 0 + MANAGE_USERS 권한
-                users = userService.getManageableUsers(adminUserId);
-                log.info("권한 보유 사용자 {} - 전체 사용자 조회: {}명", adminUserId, users.size());
-            }
-            else {
-                // 권한 없음
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("error", "사용자 조회 권한이 없습니다."));
+                // jobLevel 1: 본인 부서만 조회
+                String deptBase = admin.getDeptCode().replaceAll("\\d+$", "");
+                pagedUsers = userService.getDepartmentUsersByAdminWithPaging(
+                        deptBase, showAll, searchTerm, pageable);
+                log.info("부서장 {} - 부서 {} 사용자 조회", adminUserId, deptBase);
+            } else if (adminLevel >= 2) {
+                // jobLevel 2 이상: 전체 조회
+                pagedUsers = userService.getAllUsersByAdminWithPaging(showAll, searchTerm, pageable);
+                log.info("관리자 {} (level {}) - 전체 사용자 조회", adminUserId, adminLevel);
+            } else {
+                // jobLevel 0: 권한에 따라 결정
+                Set<PermissionType> permissions = permissionService.getAllUserPermissions(adminUserId);
+                if (permissions.contains(PermissionType.MANAGE_USERS)) {
+                    pagedUsers = userService.getAllUsersByAdminWithPaging(showAll, searchTerm, pageable);
+                } else {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("error", "사용자 조회 권한이 없습니다."));
+                }
             }
 
-            // 추가: DTO 변환으로 직렬화 에러 방지 (UserResponseDto 사용, deptCode base 그룹화)
-            List<UserResponseDto> dtos = users.stream()
-                    .map(u -> {
-                        UserResponseDto dto = new UserResponseDto();
-                        dto.setUserId(u.getUserId());
-                        dto.setUserName(u.getUserName());
-                        dto.setDeptCode(u.getDeptCode().replaceAll("\\d+$", "")); // base 코드 (OS1 → OS)
-                        dto.setJobLevel(u.getJobLevel());
-                        dto.setRole(u.getRole().toString()); // enum to string
-                        dto.setUseFlag(u.getUseFlag());
-                        // Department 필드 생략 (LAZY 에러 피함)
-                        return dto;
-                    }).collect(Collectors.toList());
+            return ResponseEntity.ok(pagedUsers);
 
-            return ResponseEntity.ok(dtos); // 변경: users → dtos 반환
-
-        } catch (RuntimeException e) { // 추가: 세부 예외 처리
-            log.error("런타임 오류: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            log.error("사용자 조회 오류: userId={}", authentication.getPrincipal(), e);
+            log.error("사용자 조회 오류: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "사용자 조회 중 오류가 발생했습니다: " + e.getMessage()));
+                    .body(Map.of("error", "사용자 조회 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 💡 [NEW] 권한 통합 조회 API - N+1 문제 해결
+     * GET /api/v1/admin/permissions/users/all
+     * 모든 사용자의 개별 권한을 한 번에 가져옵니다.
+     */
+    @GetMapping("/permissions/users/all")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> getAllUserPermissions() {
+        try {
+            // PermissionService에 통합 조회 메서드 추가가 필요함
+            Map<String, Set<PermissionType>> userPermissions = permissionService.getAllUserPermissionsGroupedByUserId();
+
+            // 응답 DTO 생성
+            Map<String, List<String>> responseMap = userPermissions.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey,
+                            e -> e.getValue().stream().map(PermissionType::name).collect(Collectors.toList())
+                    ));
+
+            // DTO로 감싸서 반환
+            return ResponseEntity.ok(Map.of("userPermissions", responseMap));
+
+        } catch (Exception e) {
+            log.error("전체 사용자 권한 조회 오류: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "권한 정보를 가져오는 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 💡 [NEW] 부서 권한 통합 조회 API - N+1 문제 해결
+     * GET /api/v1/admin/permissions/departments/all
+     */
+    @GetMapping("/permissions/departments/all")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> getAllDeptPermissions() {
+        try {
+            // PermissionService에 통합 조회 메서드 추가가 필요함
+            Map<String, Set<PermissionType>> deptPermissions = permissionService.getAllDeptPermissionsGroupedByDeptCode();
+
+            Map<String, List<String>> responseMap = deptPermissions.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey,
+                            e -> e.getValue().stream().map(PermissionType::name).collect(Collectors.toList())
+                    ));
+
+            return ResponseEntity.ok(Map.of("deptPermissions", responseMap));
+        } catch (Exception e) {
+            log.error("전체 부서 권한 조회 오류: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "부서 권한 정보를 가져오는 중 오류가 발생했습니다."));
+        }
+    }
+
+    @GetMapping("/stats")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<AdminStatsDto> getAdminDashboardStats() {
+        try {
+            AdminStatsDto stats = userService.getAdminDashboardStats();
+            return ResponseEntity.ok(stats);
+        } catch (Exception e) {
+            log.error("통계 데이터 조회 오류: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
 }

@@ -1,6 +1,8 @@
 package sunhan.sunhanbackend.repository.mysql.approval;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStepHistory;
 import sunhan.sunhanbackend.enums.approval.ApprovalAction;
@@ -45,4 +47,15 @@ public interface ApprovalStepHistoryRepository extends JpaRepository<ApprovalSte
     );
 
     List<ApprovalStepHistory> findByApprovalProcessId(Long approvalProcessId);
+
+    @Query("SELECT h FROM ApprovalStepHistory h " +
+            "WHERE h.approvalProcess.id = :approvalProcessId " +
+            "AND h.stepOrder = :stepOrder " +
+            "AND h.action IN :actions " +
+            "ORDER BY h.actionDate DESC")  // 최신 actionDate 우선 정렬
+    List<ApprovalStepHistory> findByApprovalProcessIdAndStepOrderAndActionIn(
+            @Param("approvalProcessId") Long approvalProcessId,
+            @Param("stepOrder") Integer stepOrder,
+            @Param("actions") List<ApprovalAction> actions
+    );
 }

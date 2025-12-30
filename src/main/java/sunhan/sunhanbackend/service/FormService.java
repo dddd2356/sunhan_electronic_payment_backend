@@ -16,12 +16,14 @@ import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleEntry;
 import sunhan.sunhanbackend.enums.ContractType;
 import sunhan.sunhanbackend.enums.Role;
+import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
 import sunhan.sunhanbackend.util.HtmlPdfRenderer;
 import sunhan.sunhanbackend.util.LeaveApplicationPdfRenderer;
 import sunhan.sunhanbackend.util.WorkSchedulePdfRenderer;
+import sunhan.sunhanbackend.entity.mysql.Department;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -47,12 +49,14 @@ public class FormService {
 
     private final UserRepository userRepository;
     private final WorkScheduleRepository workScheduleRepository;
+    private final DepartmentRepository departmentRepository;
 
     @Autowired
     private ObjectMapper objectMapper;
-    public FormService(UserRepository userRepository, WorkScheduleRepository workScheduleRepository, ObjectMapper objectMapper) {
+    public FormService(UserRepository userRepository, WorkScheduleRepository workScheduleRepository, DepartmentRepository departmentRepository, ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.workScheduleRepository = workScheduleRepository;
+        this.departmentRepository = departmentRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -190,6 +194,8 @@ public class FormService {
                 applicant.ifPresent(a -> {
                     objectNode.put("applicantName", a.getUserName());
                     objectNode.put("applicantDept", a.getDeptCode());
+                    String deptName = getDepartmentName(a.getDeptCode());
+                    objectNode.put("applicantDeptName", deptName);
                     objectNode.put("applicantPosition", a.getJobLevel());
                     String fullAddress = a.getAddress() != null ? a.getAddress() : "";
                     String detailAddress = a.getDetailAddress() != null ? a.getDetailAddress() : "";
@@ -272,6 +278,26 @@ public class FormService {
         }
         return objectMapper.writeValueAsString(rootNode);
     }
+
+    // ✅ 부서명 조회 헬퍼 메서드 추가
+    private String getDepartmentName(String deptCode) {
+        if (deptCode == null || deptCode.isEmpty()) {
+            return "";
+        }
+
+        try {
+            // 숫자 제거하여 base 부서 코드 추출 (예: OS1 -> OS)
+            String baseDeptCode = deptCode.replaceAll("\\d+$", "");
+
+            return departmentRepository.findByDeptCode(baseDeptCode)
+                    .map(Department::getDeptName)
+                    .orElse(deptCode); // 조회 실패 시 원래 코드 반환
+        } catch (Exception e) {
+            log.warn("부서명 조회 실패: deptCode={}", deptCode, e);
+            return deptCode;
+        }
+    }
+
     private String findCeoDirectorId() {
         return userRepository.findByJobLevelAndRole("5", Role.ADMIN)
                 .stream()

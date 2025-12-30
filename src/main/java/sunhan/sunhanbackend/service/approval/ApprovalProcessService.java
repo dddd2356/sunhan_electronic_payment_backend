@@ -26,7 +26,6 @@ import sunhan.sunhanbackend.repository.mysql.approval.ApprovalLineRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.ApprovalStepHistoryRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
-import sunhan.sunhanbackend.service.NotificationService;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -41,7 +40,6 @@ public class ApprovalProcessService {
     private final ApprovalStepHistoryRepository historyRepository;
     private final ApprovalLineRepository approvalLineRepository;
     private final UserRepository userRepository;
-    private final NotificationService notificationService;
     private final LeaveApplicationRepository leaveApplicationRepository;
     private final ObjectMapper objectMapper;
     private final WorkScheduleRepository scheduleRepository;

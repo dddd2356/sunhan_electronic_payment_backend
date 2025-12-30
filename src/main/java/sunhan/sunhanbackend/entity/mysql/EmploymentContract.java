@@ -17,8 +17,18 @@ import java.time.LocalDateTime;
 @NamedEntityGraph(
         name = "EmploymentContract.withUsers",
         attributeNodes = {
-                @NamedAttributeNode("creator"),
-                @NamedAttributeNode("employee")
+                @NamedAttributeNode(value = "creator", subgraph = "creatorDept"),
+                @NamedAttributeNode(value = "employee", subgraph = "employeeDept")
+        },
+        subgraphs = {
+                @NamedSubgraph(
+                        name = "creatorDept",
+                        attributeNodes = @NamedAttributeNode("department")
+                ),
+                @NamedSubgraph(
+                        name = "employeeDept",
+                        attributeNodes = @NamedAttributeNode("department")
+                )
         }
 )
 public class EmploymentContract {

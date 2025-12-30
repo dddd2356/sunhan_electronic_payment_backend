@@ -184,8 +184,8 @@ public class PermissionService {
             }
         } catch (NumberFormatException ignored) {}
 
-        // 상위 관리자(jobLevel >= 2)면 허용
-        if (adminLevel >= 2) {
+        // 상위 관리자(jobLevel >= 1)면 허용
+        if (adminLevel >= 1) {
             requestCache.put(validationKey, Collections.emptySet()); // 검증 완료 표시
             return;
         }
@@ -193,7 +193,7 @@ public class PermissionService {
         // 한 번의 쿼리로 개인 + 부서 권한 확인
         Set<PermissionType> allPermissions = getAllUserPermissions(userId);
         if (!allPermissions.contains(PermissionType.MANAGE_USERS)) {
-            throw new RuntimeException("권한 관리는 상위 관리자 또는 MANAGE_USERS 권한이 있는 사용자만 가능합니다.");
+            throw new RuntimeException("권한 관리는 부서장(jobLevel 1) 이상만 가능합니다.");
         }
 
         requestCache.put(validationKey, Collections.emptySet()); // 검증 완료 표시
@@ -242,24 +242,35 @@ public class PermissionService {
     @Transactional
     @CacheEvict(value = "userAllPermissionsCache", allEntries = true)
     public void grantUserPermission(String adminUserId, String targetUserId, PermissionType permissionType) {
+        // 1️⃣ 권한 관리자 자격 검증
         validateAdminPermission(adminUserId);
-
+        UserEntity admin = userRepository.findByUserId(adminUserId)
+                .orElseThrow(() -> new RuntimeException("관리자를 찾을 수 없습니다: " + adminUserId));
         UserEntity targetUser = userRepository.findByUserId(targetUserId)
                 .orElseThrow(() -> new RuntimeException("대상 사용자를 찾을 수 없습니다: " + targetUserId));
 
-//        if (targetUser.getRole() != Role.ADMIN) {
-//            throw new RuntimeException("ADMIN 권한이 있는 사용자에게만 인사 권한을 부여할 수 있습니다.");
-//        }
+        int adminLevel = Integer.parseInt(admin.getJobLevel());
 
+        // 2️⃣ jobLevel 1 부서장: 같은 부서만 권한 부여 가능
+        if (adminLevel == 1) {
+            String adminDeptBase = admin.getDeptCode().replaceAll("\\d+$", "");
+            String targetDeptBase = targetUser.getDeptCode().replaceAll("\\d+$", "");
+
+            if (!adminDeptBase.equals(targetDeptBase)) {
+                throw new RuntimeException("같은 부서의 사용자에게만 권한을 부여할 수 있습니다.");
+            }
+        }
+
+        // 3️⃣ 중복 체크
         if (userPermissionRepository.existsByUserIdAndPermissionType(targetUserId, permissionType)) {
             log.info("사용자 {}에게 이미 {} 권한이 존재합니다", targetUserId, permissionType);
             return;
         }
 
+        // 4️⃣ 권한 부여
         UserPermissionEntity permission = new UserPermissionEntity(targetUserId, permissionType);
         userPermissionRepository.save(permission);
 
-        // 🆕 캐시 무효화
         invalidatePermissionCache();
 
         log.info("관리자 {}가 사용자 {}에게 {} 권한 부여", adminUserId, targetUserId, permissionType);
@@ -271,10 +282,29 @@ public class PermissionService {
     @Transactional
     @CacheEvict(value = "userAllPermissionsCache", allEntries = true)
     public void revokeUserPermission(String adminUserId, String targetUserId, PermissionType permissionType) {
+        // 1️⃣ 권한 관리자 자격 검증
         validateAdminPermission(adminUserId);
+
+        UserEntity admin = userRepository.findByUserId(adminUserId)
+                .orElseThrow(() -> new RuntimeException("관리자를 찾을 수 없습니다: " + adminUserId));
+        UserEntity targetUser = userRepository.findByUserId(targetUserId)
+                .orElseThrow(() -> new RuntimeException("대상 사용자를 찾을 수 없습니다: " + targetUserId));
+
+        int adminLevel = Integer.parseInt(admin.getJobLevel());
+
+        // 2️⃣ jobLevel 1 부서장: 같은 부서만 권한 제거 가능
+        if (adminLevel == 1) {
+            String adminDeptBase = admin.getDeptCode().replaceAll("\\d+$", "");
+            String targetDeptBase = targetUser.getDeptCode().replaceAll("\\d+$", "");
+
+            if (!adminDeptBase.equals(targetDeptBase)) {
+                throw new RuntimeException("같은 부서의 사용자에게만 권한을 제거할 수 있습니다.");
+            }
+        }
+
+        // 3️⃣ 권한 제거
         userPermissionRepository.deleteByUserIdAndPermissionType(targetUserId, permissionType);
 
-        // 🆕 캐시 무효화
         invalidatePermissionCache();
 
         log.info("관리자 {}가 사용자 {}에서 {} 권한 제거", adminUserId, targetUserId, permissionType);
@@ -410,5 +440,29 @@ public class PermissionService {
         }
 
         return result;
+    }
+
+    // 💡 [NEW] 모든 사용자의 권한을 한 번에 조회하여 Map으로 반환
+    public Map<String, Set<PermissionType>> getAllUserPermissionsGroupedByUserId() {
+        // DB에서 모든 UserPermissionEntity를 한 번에 조회합니다.
+        List<UserPermissionEntity> allPermissions = userPermissionRepository.findAll();
+
+        return allPermissions.stream()
+                .collect(Collectors.groupingBy(
+                        UserPermissionEntity::getUserId,
+                        Collectors.mapping(UserPermissionEntity::getPermissionType, Collectors.toSet())
+                ));
+    }
+
+    // 💡 [NEW] 모든 부서의 권한을 한 번에 조회하여 Map으로 반환
+    public Map<String, Set<PermissionType>> getAllDeptPermissionsGroupedByDeptCode() {
+        // DB에서 모든 DeptPermissionEntity를 한 번에 조회합니다.
+        List<DeptPermissionEntity> allPermissions = deptPermissionRepository.findAll();
+
+        return allPermissions.stream()
+                .collect(Collectors.groupingBy(
+                        DeptPermissionEntity::getDeptCode,
+                        Collectors.mapping(DeptPermissionEntity::getPermissionType, Collectors.toSet())
+                ));
     }
 }

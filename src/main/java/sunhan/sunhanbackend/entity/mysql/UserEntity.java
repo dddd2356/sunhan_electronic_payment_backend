@@ -3,6 +3,7 @@ package sunhan.sunhanbackend.entity.mysql;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.Hibernate;
 import org.hibernate.annotations.CacheConcurrencyStrategy;
 import sunhan.sunhanbackend.enums.Role;
 import org.hibernate.annotations.Cache; // 하이버네이트 어노테이션 임포트
@@ -67,13 +68,10 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     private Role role = Role.USER; // 기본값 USER
     // UserEntity.java에 추가할 필드들
     @Column(name = "total_vacation_days")
-    private Integer totalVacationDays = 15; // 기본값 15일
+    private Double totalVacationDays = 15.0;
 
     @Column(name = "used_vacation_days")
-    private Integer usedVacationDays = 0; // 사용한 휴가일수
-
-    @Column(name = "phone_verified")
-    private Boolean phoneVerified = false;
+    private Double usedVacationDays = 0.0;
 
     // 개인정보 수집/이용 동의 필드 추가
     @Column(name = "privacy_consent")
@@ -121,14 +119,14 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
      * 남은 연차 일수 계산
      * @return 총 휴가일수 - 사용한 휴가일수
      */
-    public Integer getRemainingAnnualLeave() {
+    public Double getRemainingAnnualLeave() {
         if (totalVacationDays == null) {
-            return 15; // 기본값
+            return 15.0;
         }
         if (usedVacationDays == null) {
             return totalVacationDays;
         }
-        return Math.max(0, totalVacationDays - usedVacationDays);
+        return Math.max(0.0, totalVacationDays - usedVacationDays);
     }
 
     /**
@@ -140,18 +138,15 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
         if (days <= 0) {
             throw new IllegalArgumentException("사용 일수는 0보다 커야 합니다.");
         }
-
         if (getRemainingAnnualLeave() < days) {
             throw new IllegalStateException(
-                    String.format("잔여 연차가 부족합니다. (필요: %.1f일, 잔여: %d일)",
-                            days, getRemainingAnnualLeave())
+                    String.format("잔여 연차가 부족합니다. (필요: %.1f일, 잔여: %.1f일)", days, getRemainingAnnualLeave())
             );
         }
-
         if (usedVacationDays == null) {
-            usedVacationDays = 0;
+            usedVacationDays = 0.0;
         }
-        usedVacationDays += (int) Math.ceil(days);
+        usedVacationDays += days;
     }
 
     /**
@@ -162,22 +157,16 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
         if (days <= 0) {
             throw new IllegalArgumentException("복구 일수는 0보다 커야 합니다.");
         }
-
         if (usedVacationDays == null) {
-            usedVacationDays = 0;
+            usedVacationDays = 0.0;
         }
-
-        usedVacationDays = Math.max(0, usedVacationDays - (int) Math.ceil(days));
+        usedVacationDays = Math.max(0.0, usedVacationDays - days);
     }
 
     public String getDepartmentName() {
-        if (this.department != null) {
+        if (this.department != null && Hibernate.isInitialized(this.department)) {
             return this.department.getDeptName();
         }
-        // 숫자 제외 base로 fallback
-        String baseCode = this.deptCode.replaceAll("\\d+$", "");
-        // DepartmentRepository 주입 필요하거나 서비스 호출
-        // 예: return "기본 부서 (" + baseCode + ")"; // 임시
         return null;
     }
 }

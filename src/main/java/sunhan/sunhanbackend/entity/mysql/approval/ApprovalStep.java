@@ -44,11 +44,11 @@ public class ApprovalStep {
     @Column(name = "is_optional")
     private Boolean isOptional = false; // 선택적 단계 여부
 
-    @Column(name = "can_skip")
-    private Boolean canSkip = false; // 건너뛸 수 있는지 여부
+//    @Column(name = "can_skip")
+//    private Boolean canSkip = false; // 건너뛸 수 있는지 여부
 
-    @Column(name = "is_final_approval_available")
-    private Boolean isFinalApprovalAvailable = false; // 전결 가능 여부
+//    @Column(name = "is_final_approval_available")
+//    private Boolean isFinalApprovalAvailable = false; // 전결 가능 여부
 
     // ✅ 복사 메서드 추가
     public ApprovalStep copy() {
@@ -61,8 +61,8 @@ public class ApprovalStep {
         newStep.setJobLevel(this.jobLevel);
         newStep.setDeptCode(this.deptCode);
         newStep.setIsOptional(this.isOptional);
-        newStep.setCanSkip(this.canSkip);
-        newStep.setIsFinalApprovalAvailable(this.isFinalApprovalAvailable);
+//        newStep.setCanSkip(this.canSkip);
+//        newStep.setIsFinalApprovalAvailable(this.isFinalApprovalAvailable);
         return newStep;
     }
 }

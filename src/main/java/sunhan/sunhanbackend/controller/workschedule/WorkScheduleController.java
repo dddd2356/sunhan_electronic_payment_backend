@@ -11,16 +11,21 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStep;
+import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStepHistory;
 import sunhan.sunhanbackend.entity.mysql.approval.DocumentApprovalProcess;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleEntry;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleTemplate;
+import sunhan.sunhanbackend.enums.PermissionType;
+import sunhan.sunhanbackend.enums.approval.ApprovalAction;
 import sunhan.sunhanbackend.enums.approval.DocumentType;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
+import sunhan.sunhanbackend.repository.mysql.approval.ApprovalStepHistoryRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleEntryRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
 import sunhan.sunhanbackend.service.PdfGenerationService;
+import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
 import sunhan.sunhanbackend.service.workschedule.WorkScheduleService;
 import sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus;
@@ -51,6 +56,8 @@ public class WorkScheduleController {
     private final WorkScheduleEntryRepository entryRepository;
     private final DocumentApprovalProcessRepository processRepository;
     private final PdfGenerationService pdfGenerationService;
+    private final PermissionService permissionService;
+    private final ApprovalStepHistoryRepository historyRepository;
 
     /**
      * 내 부서의 근무표 목록 조회
@@ -65,9 +72,25 @@ public class WorkScheduleController {
             String userId = auth.getName();
             UserEntity user = userRepository.findByUserId(userId)
                     .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
+            // ✅ 권한 확인
+            Set<PermissionType> permissions = permissionService.getAllUserPermissions(userId);
+            boolean hasManagePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
 
-            List<WorkSchedule> schedules = scheduleRepository
-                    .findByDeptCodeOrderByScheduleYearMonthDesc(user.getDeptCode());
+            List<WorkSchedule> schedules;
+
+            if (hasManagePermission) {
+                // 관리 권한: 모든 부서의 완료된 근무표
+                schedules = scheduleRepository.findByApprovalStatusInOrderByScheduleYearMonthDesc(
+                        Arrays.asList(WorkSchedule.ScheduleStatus.APPROVED)
+                );
+            } else {
+                // 일반 사용자: 내 부서의 완료된 근무표 + 내가 참여한 커스텀 근무표
+                schedules = scheduleRepository.findCompletedSchedulesForUser(
+                        user.getDeptCode(),
+                        userId,
+                        WorkSchedule.ScheduleStatus.APPROVED
+                );
+            }
 
             // Map으로 변환해 creatorName 추가 (프론트 WorkSchedule 필드 맞춤)
             List<Map<String, Object>> enhancedSchedules = schedules.stream().map(s -> {
@@ -82,6 +105,11 @@ public class WorkScheduleController {
                 map.put("isPrintable", s.getIsPrintable());
                 map.put("createdAt", s.getCreatedAt());
                 map.put("updatedAt", s.getUpdatedAt());
+                List<String> memberIds = s.getEntries().stream()
+                        .filter(e -> !e.getIsDeleted())
+                        .map(WorkScheduleEntry::getUserId)
+                        .collect(Collectors.toList());
+                map.put("memberUserIds", memberIds);
                 map.put("creatorSignatureUrl", s.getCreatorSignatureUrl());
                 map.put("creatorSignedAt", s.getCreatorSignedAt());
                 // 다른 필드 필요 시 추가 (e.g., approvalSteps)
@@ -308,6 +336,24 @@ public class WorkScheduleController {
 
             WorkSchedule schedule = scheduleRepository.findById(id)
                     .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다. "));
+
+
+            // ✅ 반려 시 APPROVED 상태에서 인사팀 권한 확인
+            if (!approve && schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.APPROVED) {
+                Set<PermissionType> permissions = permissionService.getAllUserPermissions(userId);
+                if (!permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE)) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("error", "승인된 근무표를 반려할 권한이 없습니다."));
+                }
+
+                // ✅ 인사팀 반려 처리
+                schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.REJECTED);
+                schedule.setCurrentApprovalStep(0);
+                schedule.setIsActive(false);
+                scheduleRepository.save(schedule);
+
+                return ResponseEntity.ok(Map.of("message", "근무표가 반려되었습니다."));
+            }
 
             // ✅ 상태 검증
             if (schedule.getApprovalStatus() != SUBMITTED) {
@@ -756,21 +802,21 @@ public class WorkScheduleController {
             WorkSchedule schedule = scheduleRepository.findById(id)
                     .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
-            // 권한 확인
-            if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED) {
+            // ✅ 권한 확인 수정: creator, entries 참여자, WORK_SCHEDULE_MANAGE 권한
+            Set<PermissionType> permissions = permissionService.getAllUserPermissions(userId);
+            boolean hasManagePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+            boolean isCreator = schedule.getCreatedBy().equals(userId);
+            boolean isParticipant = entryRepository.findByWorkScheduleIdAndUserId(id, userId).isPresent();
+
+            boolean hasAccess = hasManagePermission || isCreator || isParticipant;
+
+            if (!hasAccess || schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED || !schedule.getIsPrintable()) {
+                log.warn("PDF 접근 거부: userId={}, scheduleId={}, status={}, isPrintable={}", userId, id, schedule.getApprovalStatus(), schedule.getIsPrintable());
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("error", "승인된 근무표만 다운로드할 수 있습니다."));
+                        .body(Map.of("error", "PDF 다운로드 권한이 없습니다. (승인된 근무표만 가능)"));
             }
 
-            UserEntity user = userRepository.findByUserId(userId)
-                    .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
-
-            if (!user.getDeptCode().equals(schedule.getDeptCode())) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("error", "같은 부서원만 다운로드할 수 있습니다."));
-            }
-
-            // ✅ 수정 3: PDF가 없거나 파일이 실제로 없으면 재생성
+            // ✅ PDF 재생성 로직 (기존 유지, but 로그 강화)
             boolean needsRegeneration = false;
 
             if (schedule.getPdfUrl() == null || schedule.getPdfUrl().isEmpty()) {
@@ -782,7 +828,6 @@ public class WorkScheduleController {
 
                 if (!Files.exists(pdfPath) || Files.size(pdfPath) == 0) {
                     needsRegeneration = true;
-                    // DB 정리
                     schedule.setPdfUrl(null);
                     scheduleRepository.save(schedule);
                 }
@@ -791,64 +836,18 @@ public class WorkScheduleController {
             if (needsRegeneration) {
                 log.info("PDF 생성 시작: scheduleId={}", id);
                 pdfGenerationService.generateWorkSchedulePdfAsync(id);
-
                 return ResponseEntity.status(HttpStatus.ACCEPTED)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of(
-                                "status", "generating",
-                                "message", "PDF 생성 중입니다. 잠시 후 다시 시도해주세요."
-                        ));
+                        .body(Map.of("status", "generating", "message", "PDF 생성 중입니다. 잠시 후 다시 시도해주세요."));
             }
 
-            // ✅ PDF 파일 경로 확인
+            // ✅ PDF 파일 로드 (기존 유지)
             String pdfUrl = schedule.getPdfUrl();
             String cleanedPath = pdfUrl.replaceFirst("^/+uploads/?", "").trim();
             Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
             Path pdfPath = uploadsRoot.resolve(cleanedPath).normalize();
 
-            log.info("PDF 다운로드 시도: scheduleId={}, path={}", id, pdfPath);
-
-            // ✅ 파일 존재 및 크기 확인
-            if (!Files.exists(pdfPath)) {
-                log.warn("PDF 파일이 아직 생성되지 않음: {}", pdfPath);
-
-                // ✅ DB 정리 후 재생성 트리거
-                schedule.setPdfUrl(null);
-                scheduleRepository.save(schedule);
-                pdfGenerationService.generateWorkSchedulePdfAsync(id);
-
-                return ResponseEntity.status(HttpStatus.ACCEPTED)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of(
-                                "status", "generating",
-                                "message", "PDF 생성 중입니다. 잠시 후 다시 시도해주세요."
-                        ));
-            }
-
-            // ✅ 파일 크기 확인 (0바이트 파일 방지)
-            long fileSize = Files.size(pdfPath);
-            if (fileSize == 0) {
-                log.error("PDF 파일이 비어있음: {}", pdfPath);
-
-                // ✅ 빈 파일 삭제 및 재생성
-                Files.deleteIfExists(pdfPath);
-                schedule.setPdfUrl(null);
-                scheduleRepository.save(schedule);
-                pdfGenerationService.generateWorkSchedulePdfAsync(id);
-
-                return ResponseEntity.status(HttpStatus.ACCEPTED)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of(
-                                "status", "generating",
-                                "message", "PDF 재생성 중입니다. 잠시 후 다시 시도해주세요."
-                        ));
-            }
-
-            // ✅ PDF 읽기
             byte[] pdfBytes = Files.readAllBytes(pdfPath);
-            log.info("PDF 다운로드 성공: scheduleId={}, size={} bytes", id, pdfBytes.length);
 
-            // ✅ 안전한 파일명 생성
             String safeFilename = String.format("work_schedule_%s_%s.pdf",
                     schedule.getDeptCode(),
                     schedule.getScheduleYearMonth().replace("-", ""));
@@ -856,17 +855,11 @@ public class WorkScheduleController {
             String encodedFilename = URLEncoder.encode(safeFilename, StandardCharsets.UTF_8)
                     .replace("+", "%20");
 
-            // ✅ 응답 헤더 설정
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_PDF);
             headers.setContentLength(pdfBytes.length);
             headers.set(HttpHeaders.CONTENT_DISPOSITION,
                     "attachment; filename=\"" + safeFilename + "\"; filename*=UTF-8''" + encodedFilename);
-            headers.setCacheControl("no-cache, no-store, must-revalidate");
-            headers.setPragma("no-cache");
-            headers.setExpires(0);
-            headers.set("X-Content-Type-Options", "nosniff");
-            headers.set("ETag", String.valueOf(System.currentTimeMillis()));
 
             return ResponseEntity.ok()
                     .headers(headers)
@@ -875,12 +868,10 @@ public class WorkScheduleController {
         } catch (IOException e) {
             log.error("PDF 파일 읽기 실패: scheduleId={}", id, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("error", "PDF 파일 읽기 실패"));
         } catch (Exception e) {
             log.error("근무표 PDF 다운로드 실패: scheduleId={}", id, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("error", "PDF 다운로드 중 오류가 발생했습니다."));
         }
     }
@@ -903,8 +894,12 @@ public class WorkScheduleController {
             WorkSchedule schedule = scheduleRepository.findById(id)
                     .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
-            // 권한 확인
-            if (!schedule.getCreatedBy().equals(userId)) {
+            // 변경: 작성자 이거나 OR 관리 권한(WORK_SCHEDULE_MANAGE)이 있는 경우 허용
+            Set<PermissionType> permissions = permissionService.getAllUserPermissions(userId);
+            boolean hasManagePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+            boolean isCreator = schedule.getCreatedBy().equals(userId);
+
+            if (!isCreator && !hasManagePermission) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("error", "근무표를 수정할 권한이 없습니다."));
             }
@@ -1128,6 +1123,314 @@ public class WorkScheduleController {
             log.error("근무표 현황 조회 실패", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "근무표 현황 조회 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 근무표 삭제 (DRAFT 상태만)
+     * DELETE /api/v1/work-schedules/{id}
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> deleteSchedule(
+            @PathVariable Long id,
+            Authentication auth
+    ) {
+        if (auth == null || !auth.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            String userId = auth.getName();
+            WorkSchedule schedule = scheduleRepository.findById(id)
+                    .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+            // ✅ DRAFT 상태이고 작성자만 삭제 가능
+            if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "임시저장 상태만 삭제할 수 있습니다."));
+            }
+
+            if (!schedule.getCreatedBy().equals(userId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "작성자만 삭제할 수 있습니다."));
+            }
+
+            scheduleRepository.delete(schedule);
+            return ResponseEntity.ok(Map.of("message", "근무표가 삭제되었습니다."));
+
+        } catch (Exception e) {
+            log.error("근무표 삭제 실패: scheduleId={}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "삭제 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * ✅ 전결 권한 확인
+     */
+    @GetMapping("/{id}/can-final-approve")
+    public ResponseEntity<?> canFinalApprove(
+            @PathVariable Long id,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+
+            WorkSchedule schedule = scheduleRepository.findById(id)
+                    .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+            // 제출된 상태가 아니면 전결 불가
+            if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.SUBMITTED) {
+                return ResponseEntity.ok(Map.of("canFinalApprove", false));
+            }
+
+            // 현재 승인 단계 확인
+            DocumentApprovalProcess process = processRepository
+                    .findByDocumentIdAndDocumentType(id, DocumentType.WORK_SCHEDULE)
+                    .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
+
+            ApprovalStep currentStep = process.getApprovalLine().getSteps().stream()
+                    .filter(s -> s.getStepOrder().equals(process.getCurrentStepOrder()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("현재 단계를 찾을 수 없습니다."));
+
+            // 현재 승인자가 맞는지 확인
+            if (!userId.equals(currentStep.getApproverId())) {
+                return ResponseEntity.ok(Map.of("canFinalApprove", false));
+            }
+
+            // 전결 권한 확인
+            boolean canFinalApprove = permissionService.getAllUserPermissions(userId)
+                    .stream()
+                    .anyMatch(p ->
+                            p == PermissionType.FINAL_APPROVAL_ALL ||
+                                    p == PermissionType.FINAL_APPROVAL_WORK_SCHEDULE
+                    );
+
+            return ResponseEntity.ok(Map.of("canFinalApprove", canFinalApprove));
+
+        } catch (Exception e) {
+            log.error("전결 권한 확인 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * ✅ 전결 승인 처리
+     */
+    @PostMapping("/{id}/final-approve")
+    public ResponseEntity<?> finalApprove(
+            @PathVariable Long id,
+            @RequestBody Map<String, Integer> payload,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+            Integer stepOrder = payload.get("stepOrder");
+
+            // 전결 권한 확인
+            boolean canFinalApprove = permissionService.getAllUserPermissions(userId)
+                    .stream()
+                    .anyMatch(p ->
+                            p == PermissionType.FINAL_APPROVAL_ALL ||
+                                    p == PermissionType.FINAL_APPROVAL_WORK_SCHEDULE
+                    );
+
+            if (!canFinalApprove) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "전결 승인 권한이 없습니다."));
+            }
+
+            // 서명 이미지 가져오기
+            UserEntity approver = userRepository.findByUserId(userId)
+                    .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
+
+            String signatureImageUrl = null;
+            if (approver.getSignimage() != null) {
+                signatureImageUrl = "data:image/png;base64," +
+                        Base64.getEncoder().encodeToString(approver.getSignimage());
+            }
+
+            // 전결 승인 처리
+            DocumentApprovalProcess process = processRepository
+                    .findByDocumentIdAndDocumentType(id, DocumentType.WORK_SCHEDULE)
+                    .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
+
+            // ✅ [중요] 현재 단계 서명 저장
+            approvalProcessService.approveStep(
+                    process.getId(),
+                    userId,
+                    "전결 승인",
+                    signatureImageUrl,
+                    true   // isFinalApproval = true
+            );
+
+            // ✅ approveStep 후 process 재조회
+            process = processRepository.findById(process.getId())
+                    .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
+
+            // ✅ 현재 단계 history 조회
+            List<ApprovalStepHistory> histories = historyRepository
+                    .findByApprovalProcessIdAndStepOrderAndActionIn(
+                            process.getId(),
+                            stepOrder,
+                            List.of(ApprovalAction.APPROVED, ApprovalAction.FINAL_APPROVED)
+                    );
+
+            ApprovalStepHistory currentHistory = histories.stream()
+                    .max(Comparator.comparing(ApprovalStepHistory::getActionDate))
+                    .orElse(null);
+
+            if (currentHistory == null) {
+                log.warn("현재 단계 history 없음: processId={}, stepOrder={}", process.getId(), stepOrder);
+            }
+
+            // ✅ [수정] 이후 모든 단계를 "전결처리" 상태로 저장 (서명 이미지 없이!)
+            List<ApprovalStep> steps = process.getApprovalLine().getSteps();
+            for (int i = stepOrder; i < steps.size(); i++) {
+                ApprovalStep step = steps.get(i);
+
+                // 현재 단계는 이미 처리했으므로 스킵
+                if (step.getStepOrder().equals(stepOrder)) continue;
+
+                // 이후 단계들을 "전결처리" 상태로 저장
+                ApprovalStepHistory skipHistory = new ApprovalStepHistory();
+                skipHistory.setApprovalProcess(process);
+                skipHistory.setStepOrder(step.getStepOrder());
+                skipHistory.setStepName(step.getStepName());
+                skipHistory.setApproverId(step.getApproverId());
+
+                // 결재자 이름 조회
+                UserEntity nextApprover = userRepository.findByUserId(step.getApproverId())
+                        .orElse(null);
+                if (nextApprover != null) {
+                    skipHistory.setApproverName(nextApprover.getUserName());
+                }
+
+                skipHistory.setAction(ApprovalAction.FINAL_APPROVED);
+                skipHistory.setActionDate(LocalDateTime.now());
+                skipHistory.setComment("전결 처리 by " + approver.getUserName());
+
+                // ✅ [핵심 수정] 서명 이미지를 NULL로 설정 (전결처리 텍스트만 표시하도록)
+                skipHistory.setSignatureImageUrl(null);
+
+                historyRepository.save(skipHistory);
+            }
+
+            // WorkSchedule 상태 업데이트
+            WorkSchedule schedule = scheduleRepository.findById(id)
+                    .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+            schedule.setApprovalStatus(WorkSchedule.ScheduleStatus.APPROVED);
+            schedule.setCurrentApprovalStep(0);
+            schedule.setIsPrintable(true);
+            scheduleRepository.save(schedule);
+
+            return ResponseEntity.ok(Map.of("message", "전결 승인 완료"));
+
+        } catch (Exception e) {
+            log.error("전결 승인 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 특정 달 데이터 불러오기
+     */
+    @PostMapping("/{id}/copy-from")
+    public ResponseEntity<?> copyFromSpecificMonth(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> payload,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+            String sourceYearMonth = payload.get("sourceYearMonth");
+
+            if (sourceYearMonth == null || !sourceYearMonth.matches("\\d{4}-\\d{2}")) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "유효한 sourceYearMonth(YYYY-MM)를 입력하세요."));
+            }
+
+            WorkSchedule schedule = scheduleRepository.findById(id)
+                    .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+            if (!schedule.getCreatedBy().equals(userId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "작성자만 데이터를 불러올 수 있습니다."));
+            }
+
+            if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "임시저장 상태에서만 데이터를 불러올 수 있습니다."));
+            }
+
+            scheduleService.copyFromSpecificMonth(id, sourceYearMonth);
+            return ResponseEntity.ok(Map.of("message", "데이터 불러오기 완료: " + sourceYearMonth));
+
+        } catch (EntityNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("데이터 불러오기 실패: id={}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "서버 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 내가 작성한 근무표 목록 (DRAFT, SUBMITTED, REJECTED 상태만)
+     * GET /api/v1/work-schedules/my-documents
+     */
+    @GetMapping("/my-documents")
+    public ResponseEntity<?> getMyDocuments(Authentication auth) {
+        if (auth == null || !auth.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            String userId = auth.getName();
+
+            // DRAFT, SUBMITTED, REJECTED 상태의 내 작성 문서만 조회
+            List<WorkSchedule> schedules = scheduleRepository
+                    .findByCreatedByAndApprovalStatusInOrderByScheduleYearMonthDesc(
+                            userId,
+                            Arrays.asList(
+                                    WorkSchedule.ScheduleStatus.DRAFT,
+                                    WorkSchedule.ScheduleStatus.SUBMITTED,
+                                    WorkSchedule.ScheduleStatus.REJECTED
+                            )
+                    );
+
+            // creatorName 추가하여 반환
+            List<Map<String, Object>> enhancedSchedules = schedules.stream().map(s -> {
+                Map<String, Object> map = new HashMap<>();
+                map.put("id", s.getId());
+                map.put("deptCode", s.getDeptCode());
+                map.put("scheduleYearMonth", s.getScheduleYearMonth());
+                map.put("createdBy", s.getCreatedBy());
+                map.put("approvalStatus", s.getApprovalStatus());
+                map.put("remarks", s.getRemarks());
+                map.put("createdAt", s.getCreatedAt());
+                map.put("updatedAt", s.getUpdatedAt());
+                map.put("isCustom", s.getIsCustom());
+                map.put("customDeptName", s.getCustomDeptName());
+
+                String creatorName = userRepository.findByUserId(s.getCreatedBy())
+                        .map(UserEntity::getUserName).orElse(s.getCreatedBy());
+                map.put("creatorName", creatorName);
+
+                return map;
+            }).collect(Collectors.toList());
+
+            return ResponseEntity.ok(enhancedSchedules);
+
+        } catch (Exception e) {
+            log.error("내 작성 문서 조회 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "조회 중 오류가 발생했습니다."));
         }
     }
 }

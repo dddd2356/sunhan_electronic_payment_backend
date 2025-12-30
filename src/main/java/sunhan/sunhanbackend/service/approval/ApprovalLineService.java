@@ -83,8 +83,8 @@ public class ApprovalLineService {
             step.setJobLevel(stepDto.getJobLevel());
             step.setDeptCode(stepDto.getDeptCode());
             step.setIsOptional(stepDto.getIsOptional());
-            step.setCanSkip(stepDto.getCanSkip());
-            step.setIsFinalApprovalAvailable(stepDto.getIsFinalApprovalAvailable());
+//            step.setCanSkip(stepDto.getCanSkip());
+//            step.setIsFinalApprovalAvailable(stepDto.getIsFinalApprovalAvailable());
 
             approvalStepRepository.save(step);
         }
@@ -153,8 +153,8 @@ public class ApprovalLineService {
                 step.setJobLevel(stepDto.getJobLevel());
                 step.setDeptCode(stepDto.getDeptCode());
                 step.setIsOptional(Boolean.TRUE.equals(stepDto.getIsOptional()));
-                step.setCanSkip(Boolean.TRUE.equals(stepDto.getCanSkip()));
-                step.setIsFinalApprovalAvailable(Boolean.TRUE.equals(stepDto.getIsFinalApprovalAvailable()));
+//                step.setCanSkip(Boolean.TRUE.equals(stepDto.getCanSkip()));
+//                step.setIsFinalApprovalAvailable(Boolean.TRUE.equals(stepDto.getIsFinalApprovalAvailable()));
                 existing.getSteps().add(step);
             }
         }

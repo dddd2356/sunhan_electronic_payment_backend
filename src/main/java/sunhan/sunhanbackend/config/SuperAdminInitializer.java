@@ -31,8 +31,6 @@ public class SuperAdminInitializer implements ApplicationRunner {
     private String SUPER_ADMIN_PASSWORD;
     private static final String SUPER_ADMIN_NAME = "관리자";
 
-
-
     @Override
     public void run(ApplicationArguments args) {
         try {

@@ -704,19 +704,10 @@ public class LeaveApplicationController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "사용자 정보를 찾을 수 없습니다."));
             }
 
-            String jl = currentUser.getJobLevel();
-
-            // 핵심 규칙: 오직 jobLevel == "0" 인 사용자만 대직자 후보 조회 허용
-            if (!"0".equals(jl)) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "대직자 후보 조회 권한이 없습니다."));
-            }
-
-            // 허용된 사용자면 같은 부서의 jobLevel == "0" 이면서 useFlag == "1"인 사람들(본인 제외)만 반환
             List<UserEntity> allInDept = userService.getActiveUsersByDeptCode(currentUser.getUserId(), currentUser.getDeptCode());
 
             List<Map<String, Object>> dto = allInDept.stream()
                     .filter(u -> u.getUserId() != null && !u.getUserId().equals(userId))
-                    .filter(u -> "0".equals(u.getJobLevel()))
                     .map(u -> {
                         Map<String, Object> m = new HashMap<>();
                         m.put("userId", u.getUserId());
@@ -725,7 +716,6 @@ public class LeaveApplicationController {
                         return m;
                     })
                     .collect(Collectors.toList());
-
             return ResponseEntity.ok(dto);
         } catch (Exception e) {
             log.error("getSubstituteCandidates failed for {}: {}", userId, e.getMessage(), e);
@@ -805,37 +795,6 @@ public class LeaveApplicationController {
     }
 
     /**
-     * ✅ 결재라인 기반 승인
-     */
-    @PutMapping("/{id}/approve-with-line")
-    public ResponseEntity<?> approveWithApprovalLine(
-            @PathVariable Long id,
-            @RequestBody Map<String, Object> request,
-            Authentication auth
-    ) {
-        try {
-            String approverId = auth.getName();
-            String comment = (String) request.getOrDefault("comment", "");
-            String signatureImageUrl = (String) request.get("signatureImageUrl");
-            boolean isFinalApproval = Boolean.TRUE.equals(request.get("isFinalApproval"));
-
-            LeaveApplication application = leaveApplicationService.approveWithApprovalLine(
-                    id,
-                    approverId,
-                    comment,
-                    signatureImageUrl,
-                    isFinalApproval
-            );
-
-            return ResponseEntity.ok(application);
-        } catch (Exception e) {
-            log.error("결재라인 승인 실패", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
-        }
-    }
-
-    /**
      * ✅ 결재라인 기반 반려
      */
     @PutMapping("/{id}/reject-with-line")
@@ -901,4 +860,84 @@ public class LeaveApplicationController {
         }
     }
 
+    /**
+     * ✅ 현재 사용자가 해당 휴가원을 전결 승인할 수 있는지 확인
+     */
+    @GetMapping("/{id}/can-final-approve")
+    public ResponseEntity<?> canFinalApprove(
+            @PathVariable Long id,
+            Authentication auth
+    ) {
+        try {
+            String userId = auth.getName();
+
+            LeaveApplication application = leaveApplicationService.getLeaveApplicationEntity(id);
+
+            // 1. 현재 승인자가 맞는지 확인
+            if (!userId.equals(application.getCurrentApproverId())) {
+                return ResponseEntity.ok(Map.of("canFinalApprove", false));
+            }
+
+            // 2. 전결 권한 확인
+            boolean canFinalApprove = permissionService.getAllUserPermissions(userId)
+                    .stream()
+                    .anyMatch(p ->
+                            p == PermissionType.FINAL_APPROVAL_ALL ||
+                                    p == PermissionType.FINAL_APPROVAL_LEAVE_APPLICATION
+                    );
+
+            return ResponseEntity.ok(Map.of("canFinalApprove", canFinalApprove));
+
+        } catch (Exception e) {
+            log.error("전결 권한 확인 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ✅ 기존 /approve-with-line에서 isFinalApproval 파라미터를 사용하므로
+// 추가 작업 없이 권한 체크만 추가하면 됨
+
+    @PutMapping("/{id}/approve-with-line")
+    public ResponseEntity<?> approveWithApprovalLine(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> request,
+            Authentication auth
+    ) {
+        try {
+            String approverId = auth.getName();
+            String comment = (String) request.getOrDefault("comment", "");
+            String signatureImageUrl = (String) request.get("signatureImageUrl");
+            boolean isFinalApproval = Boolean.TRUE.equals(request.get("isFinalApproval"));
+
+            // ✅ [추가] 전결 시도 시 권한 검증
+            if (isFinalApproval) {
+                boolean canFinalApprove = permissionService.getAllUserPermissions(approverId)
+                        .stream()
+                        .anyMatch(p ->
+                                p == PermissionType.FINAL_APPROVAL_ALL ||
+                                        p == PermissionType.FINAL_APPROVAL_LEAVE_APPLICATION
+                        );
+
+                if (!canFinalApprove) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("error", "전결 승인 권한이 없습니다."));
+                }
+            }
+
+            LeaveApplication application = leaveApplicationService.approveWithApprovalLine(
+                    id,
+                    approverId,
+                    comment,
+                    signatureImageUrl,
+                    isFinalApproval
+            );
+
+            return ResponseEntity.ok(application);
+        } catch (Exception e) {
+            log.error("결재라인 승인 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
 }

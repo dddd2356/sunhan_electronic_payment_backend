@@ -340,7 +340,10 @@ public class LeaveApplicationPdfRenderer {
         String css = loadCss();
         StringBuilder html = new StringBuilder();
 
-        String applicantDept = data.path("applicantDept").asText("");
+        String applicantDeptCode = data.path("applicantDept").asText("");
+        String applicantDeptName = data.path("applicantDeptName").asText("");
+        // deptName이 없으면 deptCode 사용
+        String applicantDept = applicantDeptName.isEmpty() ? applicantDeptCode : applicantDeptName;
         String applicantName = data.path("applicantName").asText("");
         String applicantPosition = getJobLevelTitle(data, "applicantPosition");
         String applicantContact = data.path("applicantContact").asText("");

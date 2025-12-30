@@ -8,7 +8,8 @@ import lombok.Data;
 public class VacationStatusResponseDto {
     private String userId;
     private String userName;
-    private Integer totalVacationDays;
-    private Integer usedVacationDays;
-    private Integer remainingVacationDays;
+    private String deptName;
+    private Double totalVacationDays; // Double
+    private Double usedVacationDays; // Double
+    private Double remainingVacationDays; // Double
 }

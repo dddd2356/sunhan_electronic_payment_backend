@@ -6,23 +6,24 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import sunhan.sunhanbackend.dto.response.AdminStatsDto;
 import sunhan.sunhanbackend.dto.response.DepartmentDto;
+import sunhan.sunhanbackend.dto.response.UserListResponseDto;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
-import sunhan.sunhanbackend.entity.mysql.VerificationCode;
 import sunhan.sunhanbackend.entity.oracle.OracleEntity;
-import sunhan.sunhanbackend.enums.NotificationChannel;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.Role;
-import sunhan.sunhanbackend.repository.mysql.VerificationCodeRepository;
+import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import org.springframework.cache.annotation.Cacheable;
-import sunhan.sunhanbackend.template.NotificationTemplate;
 
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -31,7 +32,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -45,19 +45,18 @@ public class UserService {
     private final OracleService oracleService;
     private final PasswordEncoder passwdEncoder = new BCryptPasswordEncoder();
     private final PermissionService permissionService;
-    private final NotificationService notificationService;
-    private final VerificationCodeRepository verificationCodeRepository;  // 새 리포지토리
+
+    private final DepartmentRepository departmentRepository;
 
     @Value("${file.upload.sign-dir}")
     private String uploadDir;  // "/uploads/signatures/"
 
     @Autowired
-    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService, NotificationService notificationService, VerificationCodeRepository verificationCodeRepository) {
+    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService, DepartmentRepository departmentRepository) {
         this.userRepository = userRepository;
         this.oracleService = oracleService;
         this.permissionService = permissionService;
-        this.notificationService = notificationService;
-        this.verificationCodeRepository = verificationCodeRepository;
+        this.departmentRepository = departmentRepository;
     }
 
     /**
@@ -123,8 +122,8 @@ public class UserService {
                                     String currentPassword,
                                     String newPassword,
                                     Boolean privacyConsent,        // 개인정보 동의
-                                    Boolean notificationConsent,   // 알림 동의
-                                    String smsVerificationCode) {  // 핸드폰 인증 코드
+                                    Boolean notificationConsent   // 알림 동의
+    ) {
 
         UserEntity user = getUserInfo(userId);
 
@@ -134,25 +133,9 @@ public class UserService {
         }
         user.setPrivacyConsent(true);
 
-        // 2️⃣ 핸드폰 변경 및 인증 처리
-        if (phone != null && !phone.trim().isEmpty() && !phone.equals(user.getPhone())) {
-            // 핸드폰 번호가 바뀌었을 때만 인증 코드 필요
-            if (smsVerificationCode == null || smsVerificationCode.isEmpty()) {
-                throw new RuntimeException("전화번호 변경 시 인증 코드가 필요합니다.");
-            }
-
-            VerificationCode vc = verificationCodeRepository.findByPhone(phone.trim());
-            if (vc == null || !vc.getCode().equals(smsVerificationCode) || vc.getExpiry().isBefore(LocalDateTime.now())) {
-                throw new RuntimeException("전화번호 인증 실패 또는 코드 만료");
-            }
-
-            // 인증 성공 시
-            verificationCodeRepository.delete(vc);  // 검증 후 삭제
+        // 2️⃣ 핸드폰 변경 처리 (인증 로직 완전 제거)
+        if (phone != null && !phone.trim().isEmpty()) {
             user.setPhone(phone.trim());
-            user.setPhoneVerified(true);
-        } else {
-            // 번호가 바뀌지 않았다면 인증 코드 없이 업데이트 가능
-            user.setPhoneVerified(true); // 기존 번호는 이미 인증된 상태
         }
 
         // 3️⃣ 주소 업데이트
@@ -180,45 +163,8 @@ public class UserService {
         }
 
         UserEntity savedUser = userRepository.save(user);
-        log.info("사용자 {} 프로필 업데이트 완료 (핸드폰 인증={}, 알림동의={})",
-                userId, savedUser.getPhoneVerified(), savedUser.getNotificationConsent());
 
         return savedUser;
-    }
-
-    // 새 메서드: 인증 코드 생성 및 SMS 전송
-    public void sendVerificationCode(String phone, String userId) {
-        UserEntity user = getUserInfo(userId);
-        String code = generateRandomCode(6); // 6자리 랜덤 코드
-
-        // DB 저장 (기존 코드 덮어쓰기)
-        verificationCodeRepository.save(new VerificationCode(phone, code, LocalDateTime.now().plusMinutes(5)));
-
-        Map<String, String> variables = Map.of(
-                "#{userName}", user.getUserName(),
-                "#{verificationCode}", code
-        );
-        notificationService.sendNotification(NotificationChannel.SMS, phone,  NotificationTemplate.PHONE_VERIFICATION.getCode(), variables);
-    }
-
-    // 새 메서드: 랜덤 코드 생성
-    private String generateRandomCode(int length) {
-        Random random = new Random();
-        StringBuilder code = new StringBuilder();
-        for (int i = 0; i < length; i++) {
-            code.append(random.nextInt(10));  // 0-9 숫자
-        }
-        return code.toString();
-    }
-
-    // 새 메서드: 코드 검증
-    public boolean verifySmsCode(String phone, String code) {
-        VerificationCode vc = verificationCodeRepository.findByPhone(phone);
-        if (vc != null && vc.getCode().equals(code) && vc.getExpiry().isAfter(LocalDateTime.now())) {
-            verificationCodeRepository.delete(vc);  // 검증 후 삭제
-            return true;
-        }
-        return false;
     }
 
     /**
@@ -883,5 +829,123 @@ public class UserService {
         // dto.setRemainingVacationDays(...); // DTO에 필드 있으면 계산해서 넣기
 
         return dto;
+    }
+
+    /**
+     * UserEntity를 UserResponseDto로 변환 (부서 이름 포함)
+     */
+    private UserResponseDto convertToUserResponseDto(UserEntity user) {
+        UserResponseDto dto = new UserResponseDto();
+        dto.setUserId(user.getUserId());
+        dto.setUserName(user.getUserName());
+        dto.setDeptCode(user.getDeptCode());
+        dto.setJobType(user.getJobType());
+        dto.setJobLevel(user.getJobLevel());
+        dto.setPhone(user.getPhone());
+        dto.setAddress(user.getAddress());
+        dto.setDetailAddress(user.getDetailAddress());
+        dto.setRole(user.getRole() != null ? user.getRole().toString() : null);
+        dto.setUseFlag(user.getUseFlag());
+
+        // ✅ 부서 이름 설정 (OS1 -> OS로 매칭)
+        String baseDeptCode = user.getDeptCode().replaceAll("\\d+$", ""); // OS1 -> OS
+
+        // ✅ DepartmentRepository에서 직접 조회
+        departmentRepository.findByDeptCode(baseDeptCode)
+                .ifPresent(dept -> dto.setDeptName(dept.getDeptName()));
+
+        return dto;
+    }
+
+    /**
+     * 활성 사용자 목록을 DTO로 변환하여 반환 (계약서 생성 모달용)
+     */
+    @Transactional(readOnly = true)
+    public List<UserResponseDto> findAllUsersAsDto() {
+        List<UserEntity> users = userRepository.findByUseFlag("1");
+        return users.stream()
+                .map(this::convertToUserResponseDto)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 💡 [NEW] Admin용 사용자 목록 조회 (Server-side Pagination 적용)
+     * 전체 사용자 데이터를 한 번에 가져오지 않고 요청된 페이지의 데이터만 가져옵니다.
+     */
+    public UserListResponseDto getAllUsersByAdminWithPaging(boolean showAll, String searchTerm, Pageable pageable) {
+        String finalSearchTerm = searchTerm != null && !searchTerm.trim().isEmpty() ? searchTerm.toLowerCase() : null;
+
+        Page<UserEntity> userPage = userRepository.findAllUsersWithPaging(showAll, finalSearchTerm, pageable);
+
+        List<UserResponseDto> userDtos = userPage.getContent().stream()
+                .map(u -> {
+                    UserResponseDto dto = convertToUserResponseDto(u); // 기존 DTO 변환 로직 사용
+                    // 여기서는 DeptCode base 그룹화만 다시 처리 (AdminController에서 하던 로직)
+                    dto.setDeptCode(u.getDeptCode().replaceAll("\\d+$", ""));
+                    return dto;
+                })
+                .collect(Collectors.toList());
+
+        return new UserListResponseDto(
+                userDtos,
+                userPage.getTotalElements(),
+                userPage.getTotalPages(),
+                userPage.getNumber(),
+                userPage.getSize()
+        );
+    }
+
+    public List<UserEntity> getAllUsersForStats() {
+        // Warning: 이 메서드는 여전히 대용량 부하의 원인이 될 수 있으므로 캐시 적용 고려
+        return userRepository.findAll();
+    }
+
+    @Transactional(readOnly = true)
+    public AdminStatsDto getAdminDashboardStats() {
+        // 💡 Repository의 전용 COUNT 쿼리를 호출합니다.
+        long total = userRepository.count();
+        long active = userRepository.countByUseFlag("1");
+        long inactive = userRepository.countByUseFlag("0");
+
+        int totalDepartments = userRepository.findAllActiveDeptCodes().size();
+
+        return AdminStatsDto.builder()
+                .totalUsers(total)
+                .activeUsers(active)
+                .inactiveUsers(inactive)
+                .totalDepartments(totalDepartments)
+                .build();
+    }
+
+    /**
+     * 💡 [NEW] 부서별 사용자 목록 조회 (Server-side Pagination 적용)
+     * jobLevel 1 부서장 전용
+     */
+    @Transactional(readOnly = true)
+    public UserListResponseDto getDepartmentUsersByAdminWithPaging(
+            String deptBase, boolean showAll, String searchTerm, Pageable pageable) {
+
+        String finalSearchTerm = searchTerm != null && !searchTerm.trim().isEmpty()
+                ? searchTerm.toLowerCase() : null;
+
+        // ✅ 부서 기반 필터링이 추가된 쿼리 실행
+        Page<UserEntity> userPage = userRepository.findDepartmentUsersWithPaging(
+                deptBase, showAll, finalSearchTerm, pageable);
+
+        List<UserResponseDto> userDtos = userPage.getContent().stream()
+                .map(u -> {
+                    UserResponseDto dto = convertToUserResponseDto(u);
+                    dto.setDeptCode(u.getDeptCode().replaceAll("\\d+$", ""));
+                    return dto;
+                })
+                .collect(Collectors.toList());
+
+        return new UserListResponseDto(
+                userDtos,
+                userPage.getTotalElements(),
+                userPage.getTotalPages(),
+                userPage.getNumber(),
+                userPage.getSize()
+        );
     }
 }

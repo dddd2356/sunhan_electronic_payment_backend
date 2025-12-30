@@ -6,6 +6,7 @@ import org.springframework.data.repository.query.Param;
 import sunhan.sunhanbackend.entity.mysql.Department;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface DepartmentRepository extends JpaRepository<Department, String> {
 
@@ -15,4 +16,6 @@ public interface DepartmentRepository extends JpaRepository<Department, String> 
     // base 코드로 그룹화된 부서 조회 (LIKE 패턴 사용)
     @Query("SELECT d FROM Department d WHERE d.deptCode LIKE :baseCode% AND d.useFlag = '1'")
     List<Department> findByBaseDeptCode(@Param("baseCode") String baseCode);
+
+    Optional<Department> findByDeptCode(String deptCode);
 }

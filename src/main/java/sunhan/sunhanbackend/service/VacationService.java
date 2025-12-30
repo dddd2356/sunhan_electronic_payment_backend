@@ -1,6 +1,8 @@
 package sunhan.sunhanbackend.service;
 
+import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -14,9 +16,12 @@ import sunhan.sunhanbackend.dto.response.VacationStatusResponseDto;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
+import sunhan.sunhanbackend.enums.LeaveType;
 import sunhan.sunhanbackend.enums.PermissionType;
+import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
+import sunhan.sunhanbackend.entity.mysql.Department;
 
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -35,56 +40,44 @@ public class VacationService {
     private final LeaveApplicationRepository leaveApplicationRepository;
     private final UserService userService;
     private final PermissionService permissionService;
+    private final DepartmentRepository departmentRepository;
 
-//    /**
-//     * 사용자의 휴가 현황 조회
-//     */
-//    @Transactional(readOnly = true)
-//    public VacationStatusResponseDto getVacationStatus(String userId) {
-//        UserEntity user = userService.getUserInfo(userId);
-//        if (user == null) {
-//            throw new RuntimeException("사용자를 찾을 수 없습니다: " + userId);
-//        }
-//
-//        // 승인된 휴가 신청의 총 일수 계산
-//        Double usedDays = leaveApplicationRepository
-//                .findByApplicantIdAndStatus(userId, LeaveApplicationStatus.APPROVED)
-//                .stream()
-//                .mapToDouble(leave -> leave.getTotalDays() != null ? leave.getTotalDays() : 0.0)
-//                .sum();
-//
-//        Integer totalDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15;
-//        Integer usedVacationDays = usedDays.intValue();
-//        Integer remainingDays = totalDays - usedVacationDays;
-//
-//        return VacationStatusResponseDto.builder()
-//                .userId(userId)
-//                .userName(user.getUserName())
-//                .totalVacationDays(totalDays)
-//                .usedVacationDays(usedVacationDays)
-//                .remainingVacationDays(remainingDays)
-//                .build();
-//    }
+    // 부서 코드에서 baseCode 추출 (예: "OS01" -> "OS", "OS_01" -> "OS")
+    private String getBaseDeptCode(String deptCode) {
+        if (deptCode == null || deptCode.trim().isEmpty()) return deptCode;
+        // 기본 규칙: 끝의 선택적 구분자(_ or -)와 숫자들을 제거
+        // 예: OS01 -> OS, OS_01 -> OS, OS-01 -> OS
+        return deptCode.replaceAll("[_\\-]?\\d+$", "");
+    }
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     /**
      * ✅ 개선된 휴가 현황 조회 (DB 집계 사용)
      */
     @Transactional(readOnly = true)
     public VacationStatusResponseDto getVacationStatus(String userId) {
-        UserEntity user = userRepository.findByUserId(userId)
-                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다: " + userId));
 
-        // ✅ DB에서 직접 합산 (기존보다 10배 빠름)
-        Double usedDays = leaveApplicationRepository
-                .sumTotalDaysByApplicantAndStatus(userId, LeaveApplicationStatus.APPROVED);
+        // 🔥 캐시를 우회하고 EntityManager로 직접 조회
+        UserEntity user = entityManager.find(UserEntity.class, userId);
 
-        Integer totalDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15;
-        Integer usedVacationDays = usedDays.intValue();
-        Integer remainingDays = totalDays - usedVacationDays;
+        if (user == null) {
+            throw new EntityNotFoundException("사용자를 찾을 수 없습니다: " + userId);
+        }
+
+        // 🔥 DB에서 최신 데이터 강제 새로고침
+        entityManager.refresh(user);
+
+        Double totalDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15.0;
+        Double usedVacationDays = user.getUsedVacationDays() != null ? user.getUsedVacationDays() : 0.0;
+        Double remainingDays = totalDays - usedVacationDays;
+        String deptName = user.getDepartment() != null ? user.getDepartment().getDeptName() : user.getDeptCode();
 
         return VacationStatusResponseDto.builder()
-                .userId(userId)
+                .userId(user.getUserId())
                 .userName(user.getUserName())
+                .deptName(deptName)
                 .totalVacationDays(totalDays)
                 .usedVacationDays(usedVacationDays)
                 .remainingVacationDays(remainingDays)
@@ -109,7 +102,7 @@ public class VacationService {
      * 총 휴가일수 설정 (관리자만)
      */
     @Transactional
-    public void setTotalVacationDays(String adminUserId, String targetUserId, Integer totalDays) {
+    public void setTotalVacationDays(String adminUserId, String targetUserId, Double totalDays) {
         // 권한 검증
         if (!userService.canManageUser(adminUserId, targetUserId)) {
             throw new RuntimeException("해당 사용자의 휴가일수를 설정할 권한이 없습니다.");
@@ -156,7 +149,8 @@ public class VacationService {
                 .startDate(application.getStartDate().format(formatter))
                 .endDate(application.getEndDate().format(formatter))
                 .days(application.getTotalDays() != null ? application.getTotalDays().intValue() : 0)
-                .reason(getLeaveTypeKorean(application.getLeaveType().toString()))
+                .reason(application.getLeaveType().getDisplayName())
+                .leaveType(application.getLeaveType().name())
                 .status(application.getStatus().toString())
                 .createdDate(application.getCreatedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
                 .build();
@@ -207,59 +201,67 @@ public class VacationService {
             throw new AccessDeniedException("통계 조회 권한이 없습니다.");
         }
 
-        // 6. 기존 통계 로직 실행
+        // 1) 현재 활성화된 모든 deptCode 수집
         List<String> deptCodes = userRepository.findAllActiveDeptCodes();
 
-        return deptCodes.stream()
-                .map(this::calculateDeptStatistics)
+        // 2) baseCode로 그룹화
+        Map<String, List<String>> grouped = deptCodes.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.groupingBy(this::getBaseDeptCode));
+
+
+        return grouped.keySet().stream()
+                .map(this::calculateDeptStatisticsForBase)
                 .sorted((a, b) -> a.getDeptCode().compareTo(b.getDeptCode()))
                 .collect(Collectors.toList());
     }
 
     /**
-     * 특정 부서의 통계 계산
+     * baseCode 단위로 실제 사용자들을 조회해 통계를 계산
+     * ex) baseCode = "OS"  -> findByDeptCodeStartingWithAndUseFlag("OS", "1") 로 OS, OS01, OS_02 등 모두 포함
      */
-    private VacationStatisticsResponseDto calculateDeptStatistics(String deptCode) {
-        List<UserEntity> deptUsers = userRepository.findByDeptCodeAndUseFlag(deptCode, "1");
+    private VacationStatisticsResponseDto calculateDeptStatisticsForBase(String baseCode) {
+        // 1) baseCode로 시작하는 모든 활성 사용자 조회
+        List<UserEntity> deptUsers = userRepository.findByDeptCodeStartingWithAndUseFlag(baseCode, "1");
 
         if (deptUsers.isEmpty()) {
+            // deptName은 department 테이블에서 baseCode로 찾거나 baseCode 자체 사용
+            String deptName = departmentRepository.findByDeptCode(baseCode)
+                    .map(Department::getDeptName)
+                    .orElse(baseCode);
+
             return VacationStatisticsResponseDto.builder()
-                    .deptCode(deptCode)
-                    .deptName(deptCode)
+                    .deptCode(baseCode)
+                    .deptName(deptName)
                     .totalEmployees(0)
                     .avgUsageRate(0.0)
-                    .totalVacationDays(0)
-                    .totalUsedDays(0)
-                    .totalRemainingDays(0)
+                    // DTO가 Double을 기대하면 0.0으로 넘겨야 함
+                    .totalVacationDays(0.0)
+                    .totalUsedDays(0.0)
+                    .totalRemainingDays(0.0)
                     .employees(new ArrayList<>())
                     .build();
         }
 
+        // 기존 calculateDeptStatistics 내용과 동일한 집계(직원별 계산 재사용)
         List<EmployeeVacationDto> employeeStats = deptUsers.stream()
                 .map(this::calculateEmployeeVacation)
                 .sorted((a, b) -> b.getUsageRate().compareTo(a.getUsageRate()))
                 .collect(Collectors.toList());
 
-        int totalVacationDays = employeeStats.stream()
-                .mapToInt(EmployeeVacationDto::getTotalDays)
-                .sum();
+        // 합계들을 double로 계산해서 DTO의 Double 필드에 맞춤
+        double totalVacationDays = employeeStats.stream().mapToDouble(EmployeeVacationDto::getTotalDays).sum();
+        double totalUsedDays = employeeStats.stream().mapToDouble(EmployeeVacationDto::getUsedDays).sum();
+        double totalRemainingDays = employeeStats.stream().mapToDouble(EmployeeVacationDto::getRemainingDays).sum();
+        double avgUsageRate = employeeStats.stream().mapToDouble(EmployeeVacationDto::getUsageRate).average().orElse(0.0);
 
-        int totalUsedDays = employeeStats.stream()
-                .mapToInt(EmployeeVacationDto::getUsedDays)
-                .sum();
-
-        int totalRemainingDays = employeeStats.stream()
-                .mapToInt(EmployeeVacationDto::getRemainingDays)
-                .sum();
-
-        double avgUsageRate = employeeStats.stream()
-                .mapToDouble(EmployeeVacationDto::getUsageRate)
-                .average()
-                .orElse(0.0);
+        String deptName = departmentRepository.findByDeptCode(baseCode)
+                .map(Department::getDeptName)
+                .orElse(baseCode);
 
         return VacationStatisticsResponseDto.builder()
-                .deptCode(deptCode)
-                .deptName(deptCode)
+                .deptCode(baseCode)
+                .deptName(deptName)
                 .totalEmployees(deptUsers.size())
                 .avgUsageRate(Math.round(avgUsageRate * 100.0) / 100.0)
                 .totalVacationDays(totalVacationDays)
@@ -273,25 +275,19 @@ public class VacationService {
      * 개별 직원의 휴가 정보 계산
      */
     private EmployeeVacationDto calculateEmployeeVacation(UserEntity user) {
-        Double usedDays = leaveApplicationRepository
-                .findByApplicantIdAndStatus(user.getUserId(), LeaveApplicationStatus.APPROVED)
-                .stream()
-                .mapToDouble(leave -> leave.getTotalDays() != null ? leave.getTotalDays() : 0.0)
-                .sum();
-
-        int totalDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15;
-        int used = usedDays.intValue();
-        int remaining = totalDays - used;
-        double usageRate = totalDays > 0 ? (used * 100.0 / totalDays) : 0.0;
+        Double totalDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15.0;
+        Double usedDays = user.getUsedVacationDays() != null ? user.getUsedVacationDays() : 0.0;
+        Double remaining = totalDays - usedDays;
+        double usageRate = totalDays > 0 ? (usedDays * 100.0 / totalDays) : 0.0;
 
         return EmployeeVacationDto.builder()
                 .userId(user.getUserId())
                 .userName(user.getUserName())
                 .jobLevel(user.getJobLevel())
                 .jobType(user.getJobType())
-                .totalDays(totalDays)
-                .usedDays(used)
-                .remainingDays(remaining)
+                .totalDays(totalDays.intValue())
+                .usedDays(usedDays.intValue())
+                .remainingDays(remaining.intValue())
                 .usageRate(Math.round(usageRate * 100.0) / 100.0)
                 .build();
     }
@@ -302,39 +298,23 @@ public class VacationService {
      */
     @Transactional(readOnly = true)
     public List<VacationStatusResponseDto> getVacationStatusBatch(List<String> userIds) {
-        // 1. 사용자 정보 일괄 조회
-        List<UserEntity> users = userRepository.findByUserIdIn(userIds);
-        Map<String, UserEntity> userMap = users.stream()
-                .collect(Collectors.toMap(UserEntity::getUserId, Function.identity()));
+        List<UserEntity> users = userRepository.findAllById(userIds);
 
-        // 2. 승인된 휴가 일수 일괄 조회
-        List<Object[]> usedDaysResults = leaveApplicationRepository
-                .sumTotalDaysByApplicantsAndStatus(userIds, LeaveApplicationStatus.APPROVED);
-
-        Map<String, Double> usedDaysMap = usedDaysResults.stream()
-                .collect(Collectors.toMap(
-                        row -> (String) row[0],
-                        row -> (Double) row[1]
-                ));
-
-        // 3. 결과 조합
-        return userIds.stream()
-                .map(userId -> {
-                    UserEntity user = userMap.get(userId);
-                    if (user == null) return null;
-
-                    Double usedDays = usedDaysMap.getOrDefault(userId, 0.0);
-                    Integer totalDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15;
+        return users.stream()
+                .map(user -> {
+                    Double totalVacationDays = user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15.0;
+                    Double usedVacationDays = user.getUsedVacationDays() != null ? user.getUsedVacationDays() : 0.0;
+                    Double remainingVacationDays = totalVacationDays - usedVacationDays;
 
                     return VacationStatusResponseDto.builder()
-                            .userId(userId)
+                            .userId(user.getUserId())
                             .userName(user.getUserName())
-                            .totalVacationDays(totalDays)
-                            .usedVacationDays(usedDays.intValue())
-                            .remainingVacationDays(totalDays - usedDays.intValue())
+
+                            .totalVacationDays(totalVacationDays)
+                            .usedVacationDays(usedVacationDays)
+                            .remainingVacationDays(remainingVacationDays)
                             .build();
                 })
-                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
     }
 }

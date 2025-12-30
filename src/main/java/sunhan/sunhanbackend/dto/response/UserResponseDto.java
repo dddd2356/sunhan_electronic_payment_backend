@@ -11,6 +11,7 @@ public class UserResponseDto {
     private String userId;
     private String userName;
     private String deptCode;
+    private String deptName;
     private String jobType;
     private String jobLevel;
     private String phone;
@@ -23,9 +24,9 @@ public class UserResponseDto {
     private Boolean notificationConsent;
     private String useFlag;
     // 휴가 관련 필드 (서비스에서 setTotalVacationDays / setUsedVacationDays 호출함)
-    private Integer totalVacationDays;
-    private Integer usedVacationDays;
-    private Integer remainingVacationDays;
+    private Double totalVacationDays;
+    private Double usedVacationDays;
+    private Double remainingVacationDays;
 
     // 관리 관련 플래그 / 통계
     private Boolean isAdmin;

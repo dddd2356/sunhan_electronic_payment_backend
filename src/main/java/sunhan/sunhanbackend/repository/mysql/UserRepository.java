@@ -3,6 +3,8 @@ package sunhan.sunhanbackend.repository.mysql;
 import jakarta.persistence.LockModeType;
 import org.springframework.cache.annotation.Cacheable;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -35,6 +37,7 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     @EntityGraph(attributePaths = {"department"})
     @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds")
     List<UserEntity> findWithDeptByUserIdIn(@Param("userIds") Collection<String> userIds);
+    @EntityGraph(attributePaths = {"department"})
     List<UserEntity> findByUseFlag(String useFlag);
 
     // 부서별 조회 (캐시)
@@ -114,4 +117,42 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
 
     //  활성 여부 + 직급 목록으로 조회
     List<UserEntity> findByUseFlagAndJobLevelIn(String useFlag, List<String> jobLevels);
+
+    // deptCode로 시작하는(예: OS, OS01, OS_01 등) 모든 사용자를 활성(useFlag) 기준으로 가져옴
+    List<UserEntity> findByDeptCodeStartingWithAndUseFlag(String baseDeptCode, String useFlag);
+
+    // 💡 [NEW] 페이징된 사용자 목록 조회 (활성/비활성 여부 + 검색어 포함)
+    @Query("SELECT u FROM UserEntity u WHERE (:showAll = TRUE OR u.useFlag = '1') " +
+            "AND (:searchTerm IS NULL OR LOWER(u.userId) LIKE %:searchTerm% OR LOWER(u.userName) LIKE %:searchTerm% OR LOWER(u.deptCode) LIKE %:searchTerm%)")
+    Page<UserEntity> findAllUsersWithPaging(
+            @Param("showAll") boolean showAll,
+            @Param("searchTerm") String searchTerm,
+            Pageable pageable
+    );
+
+    // 💡 [NEW] 전체 사용자 목록 조회 (통계 계산용)
+    List<UserEntity> findAll();
+
+    // ✅ JPA가 자동으로 COUNT 쿼리를 생성합니다. (전체 사용자 수)
+    long count();
+
+    // ✅ useFlag='1'인 사용자 수
+    long countByUseFlag(String useFlag);
+    /**
+     * 💡 [NEW] 부서별 페이징된 사용자 목록 조회
+     * deptBase로 시작하는 부서 코드를 가진 사용자만 조회
+     */
+    @Query("SELECT u FROM UserEntity u WHERE " +
+            "u.deptCode LIKE CONCAT(:deptBase, '%') AND " +
+            "(:showAll = TRUE OR u.useFlag = '1') AND " +
+            "(:searchTerm IS NULL OR " +
+            "LOWER(u.userId) LIKE %:searchTerm% OR " +
+            "LOWER(u.userName) LIKE %:searchTerm% OR " +
+            "LOWER(u.deptCode) LIKE %:searchTerm%)")
+    Page<UserEntity> findDepartmentUsersWithPaging(
+            @Param("deptBase") String deptBase,
+            @Param("showAll") boolean showAll,
+            @Param("searchTerm") String searchTerm,
+            Pageable pageable
+    );
 }

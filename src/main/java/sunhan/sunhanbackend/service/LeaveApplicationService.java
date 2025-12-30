@@ -35,13 +35,13 @@ import sunhan.sunhanbackend.enums.*;
 import sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus;
 import sunhan.sunhanbackend.enums.approval.ApproverType;
 import sunhan.sunhanbackend.enums.approval.DocumentType;
+import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationAttachmentRepository;
 import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.ApprovalLineRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
 import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
-import sunhan.sunhanbackend.template.NotificationTemplate;
 
 import java.io.File;
 import java.io.IOException;
@@ -75,8 +75,8 @@ public class LeaveApplicationService {
     private final LeaveApplicationAttachmentRepository attachmentRepository;
     @Value("${file.upload-dir}") // application.properties에 경로 설정 필요
     private String uploadDir;
-    private final NotificationService notificationService;
     private final ApprovalLineRepository approvalLineRepository;
+    private final DepartmentRepository departmentRepository;
 
     private String toIsoString(Object maybeDate) {
         if (maybeDate == null) return LocalDateTime.now().format(ISO_LOCAL);
@@ -634,11 +634,8 @@ public class LeaveApplicationService {
     }
 
 
-    /**
-     * 전결 승인 처리 메서드 수정
-     */
     @Transactional
-    @CacheEvict(value = "userCache", key = "#approverId")
+    @CacheEvict(value = "userCache", key = "#result.applicantId")
     public LeaveApplication finalApproveLeaveApplication(Long id, String approverId) {
         log.info("Start finalApproveLeaveApplication id={} approver={}", id, approverId);
 
@@ -776,8 +773,20 @@ public class LeaveApplicationService {
         // 저장 -> 트랜잭션 내에서 실행
         LeaveApplication saved = leaveApplicationRepository.saveAndFlush(application);
 
-        // ✅ 연차 차감 추가 (approveWithApprovalLine과 동일한 로직)
-        if (saved.getTotalDays() != null && saved.getTotalDays() > 0) {
+        // ✅ [추가] 연차 여부 확인
+        boolean isAnnualLeave = false;
+        try {
+            Map<String, Object> formData = objectMapper.readValue(saved.getFormDataJson(), new TypeReference<Map<String, Object>>() {});
+            List<String> leaveTypes = (List<String>) formData.get("leaveTypes");
+            if (leaveTypes != null && leaveTypes.contains("연차휴가")) {
+                isAnnualLeave = true;
+            }
+        } catch (Exception e) {
+            log.warn("leaveTypes 파싱 실패: {}", e.getMessage());
+        }
+
+        // ✅ 연차인 경우에만 차감
+        if (isAnnualLeave && saved.getTotalDays() != null && saved.getTotalDays() > 0) {
             try {
                 deductVacationDaysInSameTransaction(saved.getApplicantId(), saved.getTotalDays());
                 log.info("전결 승인 시 연차 차감 완료: userId={}, days={}",
@@ -812,12 +821,6 @@ public class LeaveApplicationService {
         variables.put("leaveStartDate", saved.getStartDate().toString());
         variables.put("leaveEndDate", saved.getEndDate().toString());
 
-        notificationService.sendNotification(
-                NotificationChannel.KAKAO,
-                applicant.getPhone(),
-                NotificationTemplate.LEAVE_APPROVAL_COMPLETE.getCode(), // 휴가 승인 완료 템플릿
-                variables
-        );
         return saved;
     }
 
@@ -850,19 +853,14 @@ public class LeaveApplicationService {
             }
         }
 
-        // ★★★ 연차휴가가 아닌 경우 totalDays를 0으로 설정하고 일수 계산 로직 건너뛰기 ★★★
+        // 연차휴가가 아닌 경우 totalDays를 0으로 설정하고 일수 계산 로직 건너뛰기 ★★★
         boolean isAnnualLeave = dto.getLeaveTypes() != null &&
                 dto.getLeaveTypes().contains("연차휴가") &&
                 matchedType == LeaveType.ANNUAL_LEAVE;
 
-        if (!isAnnualLeave) {
-            application.setTotalDays(0.0);
-            // 시작일/종료일은 여전히 설정 (다른 휴가 유형도 날짜 정보는 필요할 수 있음)
-            setStartEndDatesFromDto(application, dto);
-            return; // 일수 계산 로직 건너뛰고 메서드 종료
-        }
+        // 제거: if (!isAnnualLeave) { application.setTotalDays(0.0); setStartEndDatesFromDto(application, dto); return; }  // 모든 휴가에서 계산
 
-        // 연차휴가인 경우에만 아래 일수 계산 로직 실행
+        // [수정] 연차 여부 무시하고 항상 계산 (다른 휴가도 totalDays 설정)
         // totalDays 설정: DTO의 값이 우선하며, 없는 경우에만 재계산
         Double totalDays = dto.getTotalDays();
         if (totalDays == null || totalDays <= 0) {
@@ -901,7 +899,7 @@ public class LeaveApplicationService {
             }
 
             if (calculatedTotalDays == 0.0) {
-                throw new IllegalArgumentException("연차휴가 신청 시 유효한 휴가 기간이 입력되어야 합니다.");
+                throw new IllegalArgumentException("유효한 휴가 기간이 입력되어야 합니다.");
             }
             application.setTotalDays(calculatedTotalDays);
         } else {
@@ -1122,36 +1120,43 @@ public class LeaveApplicationService {
     public LeaveApplication rejectLeaveApplication(Long id, String approverId, String rejectionReason) {
         LeaveApplication application = getOrThrow(id);
 
-        // Optional을 사용하여 승인자 정보를 안전하게 조회하고, 없으면 예외를 발생시킵니다.
         UserEntity approver = userRepository.findByUserId(approverId)
                 .orElseThrow(() -> new EntityNotFoundException("승인자 정보를 찾을 수 없습니다: " + approverId));
 
-        // 반려 권한 확인 (승인 권한과 동일하게 확인)
         if (!canApprove(approver, application)) {
             throw new AccessDeniedException("해당 휴가원을 반려할 권한이 없습니다.");
         }
 
+        // ✅ [추가] APPROVED 상태의 연차휴가를 반려하는 경우 복구
+        if (application.getStatus() == LeaveApplicationStatus.APPROVED
+                && application.getLeaveType() == LeaveType.ANNUAL_LEAVE
+                && application.getTotalDays() != null
+                && application.getTotalDays() > 0) {
+
+            try {
+                restoreVacationDaysInSameTransaction(application.getApplicantId(), application.getTotalDays());
+                log.info("반려 시 연차 복구: userId={}, days={}",
+                        application.getApplicantId(), application.getTotalDays());
+            } catch (Exception e) {
+                log.error("연차 복구 실패", e);
+                throw new IllegalStateException("연차 복구 실패: " + e.getMessage());
+            }
+        }
+
         application.setStatus(LeaveApplicationStatus.REJECTED);
         application.setRejectionReason(rejectionReason);
-        application.setCurrentApprovalStep(null); // 반려 시 승인 단계 초기화
-        application.setPrintable(false); // 반려 시 인쇄 불가
+        application.setCurrentApprovalStep(null);
+        application.setPrintable(false);
         application.setUpdatedAt(LocalDateTime.now());
-        //return leaveApplicationRepository.save(application);
+
         LeaveApplication savedApplication = leaveApplicationRepository.save(application);
 
-        // ✅ 반려 알림 전송 (신청자에게)
+        // 알림 전송
         UserEntity applicant = savedApplication.getApplicant();
         Map<String, String> variables = new HashMap<>();
         variables.put("applicantName", applicant.getUserName());
         variables.put("leaveType", savedApplication.getLeaveType().getDisplayName());
         variables.put("rejectionReason", rejectionReason);
-
-        notificationService.sendNotification(
-                NotificationChannel.KAKAO,
-                applicant.getPhone(),
-                NotificationTemplate.LEAVE_REJECTION.getCode(), // 휴가 반려 템플릿
-                variables
-        );
 
         return savedApplication;
     }
@@ -1536,6 +1541,7 @@ public class LeaveApplicationService {
     }
 
     @Transactional
+    @CacheEvict(value = "userCache", key = "#result.applicantId")
     public LeaveApplication approveWithApprovalLine(
             Long id,
             String approverId,
@@ -1603,8 +1609,20 @@ public class LeaveApplicationService {
             // ✅ 먼저 application 저장 (flush하여 DB에 반영)
             LeaveApplication savedApp = leaveApplicationRepository.saveAndFlush(application);
 
-            // ✅ 연차 차감을 같은 트랜잭션 내에서 실행 (REQUIRES_NEW 제거)
-            if (savedApp.getTotalDays() != null && savedApp.getTotalDays() > 0) {
+            // ✅ [추가] 연차 여부 확인
+            boolean isAnnualLeave = false;
+            try {
+                Map<String, Object> formData = objectMapper.readValue(savedApp.getFormDataJson(), new TypeReference<Map<String, Object>>() {});
+                List<String> leaveTypes = (List<String>) formData.get("leaveTypes");
+                if (leaveTypes != null && leaveTypes.contains("연차휴가")) {
+                    isAnnualLeave = true;
+                }
+            } catch (Exception e) {
+                log.warn("leaveTypes 파싱 실패: {}", e.getMessage());
+            }
+
+            // ✅ 연차인 경우에만 차감
+            if (isAnnualLeave && savedApp.getTotalDays() != null && savedApp.getTotalDays() > 0) {
                 try {
                     deductVacationDaysInSameTransaction(savedApp.getApplicantId(), savedApp.getTotalDays());
                 } catch (Exception e) {
@@ -1719,6 +1737,7 @@ public class LeaveApplicationService {
      * ✅ 새 메서드: 결재라인 기반 반려 처리
      */
     @Transactional
+    @CacheEvict(value = "userCache", key = "#result.applicantId")
     public LeaveApplication rejectWithApprovalLine(
             Long id,
             String approverId,
@@ -1736,6 +1755,22 @@ public class LeaveApplicationService {
 
         approvalProcessService.rejectStep(process.getId(), approverId, rejectionReason);
 
+        // ✅ [추가] APPROVED 상태의 연차휴가를 반려하는 경우 복구
+        if (application.getStatus() == LeaveApplicationStatus.APPROVED
+                && application.getLeaveType() == LeaveType.ANNUAL_LEAVE
+                && application.getTotalDays() != null
+                && application.getTotalDays() > 0) {
+
+            try {
+                restoreVacationDaysInSameTransaction(application.getApplicantId(), application.getTotalDays());
+                log.info("결재라인 반려 시 연차 복구: userId={}, days={}",
+                        application.getApplicantId(), application.getTotalDays());
+            } catch (Exception e) {
+                log.error("연차 복구 실패", e);
+                throw new IllegalStateException("연차 복구 실패: " + e.getMessage());
+            }
+        }
+
         application.setStatus(LeaveApplicationStatus.REJECTED);
         application.setRejectionReason(rejectionReason);
         application.setPrintable(false);
@@ -1744,7 +1779,27 @@ public class LeaveApplicationService {
         return leaveApplicationRepository.save(application);
     }
 
+
+    /**
+     * ✅ 같은 트랜잭션 내에서 연차 복구
+     */
+    private void restoreVacationDaysInSameTransaction(String userId, Double days) {
+        UserEntity user = userRepository.findByUserIdWithLock(userId)
+                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다: " + userId));
+
+        try {
+            user.restoreVacationDays(days);
+            userRepository.save(user);
+            log.info("연차 복구 완료: userId={}, restoredDays={}, remaining={}",
+                    user.getUserId(), days, user.getRemainingAnnualLeave());
+        } catch (Exception e) {
+            log.error("연차 복구 실패: {}", e.getMessage());
+            throw new IllegalStateException("연차 복구 실패: " + e.getMessage());
+        }
+    }
+
     @Transactional
+    @CacheEvict(value = "userCache", key = "#result.applicantId")
     public LeaveApplication cancelApprovedLeaveApplication(
             Long applicationId,
             String requesterId,
@@ -1764,8 +1819,8 @@ public class LeaveApplicationService {
             throw new IllegalStateException("승인 완료된 휴가원만 취소할 수 있습니다.");
         }
 
-        // ✅ 휴가 일수 복구
-        if (application.getTotalDays() != null && application.getTotalDays() > 0) {
+        // ✅ ANNUAL_LEAVE만 복구
+        if (application.getLeaveType() == LeaveType.ANNUAL_LEAVE && application.getTotalDays() != null && application.getTotalDays() > 0) {
             UserEntity applicant = userRepository.findByUserIdWithLock(application.getApplicantId())
                     .orElseThrow(() -> new EntityNotFoundException("신청자를 찾을 수 없습니다."));
 
@@ -1785,5 +1840,36 @@ public class LeaveApplicationService {
         application.setPrintable(false);
 
         return leaveApplicationRepository.save(application);
+    }
+
+    private LeaveApplicationResponseDto enrichDtoWithDeptName(
+            LeaveApplication app,
+            LeaveApplicationResponseDto dto,
+            UserEntity applicant // 꼭 applicant를 전달하도록 변경
+    ) {
+        try {
+            if (applicant != null) {
+                String applicantDeptCode = applicant.getDeptCode(); // UserEntity에서 가져옴 (예: "OS1")
+                dto.setApplicantDept(applicantDeptCode); // 기존 필드도 안전하게 채움
+
+                if (applicantDeptCode != null && !applicantDeptCode.isEmpty()) {
+                    String baseDeptCode = applicantDeptCode.replaceAll("\\d+$", ""); // 숫자 제거 (OS1 -> OS)
+                    String deptName = departmentRepository.findByDeptCode(baseDeptCode)
+                            .map(d -> d.getDeptName())
+                            .orElse(applicantDeptCode); // 조회 실패 시 원래 코드 보존
+                    dto.setApplicantDeptName(deptName);
+                } else {
+                    dto.setApplicantDeptName(null);
+                }
+            } else {
+                // applicant null이면 기존 엔티티에서 dept code 가져올 수 없음 -> 안전하게 처리
+                dto.setApplicantDeptName(null);
+            }
+        } catch (Exception e) {
+            log.warn("부서명 조회 실패: deptCode={}, error={}",
+                    applicant != null ? applicant.getDeptCode() : "null", e.getMessage());
+            dto.setApplicantDeptName(applicant != null ? applicant.getDeptCode() : null);
+        }
+        return dto;
     }
 }

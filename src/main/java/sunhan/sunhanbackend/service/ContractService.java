@@ -13,16 +13,12 @@ import org.springframework.transaction.annotation.Transactional;
 import sunhan.sunhanbackend.dto.request.CreateContractRequestDto;
 import sunhan.sunhanbackend.dto.request.UpdateFormRequestDto;
 import sunhan.sunhanbackend.dto.response.ContractResponseDto;
-import sunhan.sunhanbackend.dto.response.ReportsResponseDto;
 import sunhan.sunhanbackend.entity.mysql.EmploymentContract;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.ContractStatus;
 import sunhan.sunhanbackend.enums.ContractType;
-import sunhan.sunhanbackend.enums.NotificationChannel;
 import sunhan.sunhanbackend.repository.mysql.EmploymentContractRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
-import sunhan.sunhanbackend.template.NotificationTemplate;
-
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -42,7 +38,6 @@ public class ContractService {
     private final FormService formService;
     private final UserService userService;
     private final PdfGenerationService pdfGenerationService; // 비동기 서비스 주입
-    private final NotificationService notificationService;
 
     // 기존 메서드 - 모든 계약서 조회 (하위 호환성 유지)
     public Page<ContractResponseDto> getContracts(String userId, boolean isAdmin, Pageable pageable) {
@@ -222,13 +217,6 @@ public class ContractService {
         variables.put("startDate", savedContract.getCreatedAt().toString());
         variables.put("signDeadline", "서명 기한 정보"); // 기한 정보는 별도로 관리 필요
 
-        notificationService.sendNotification(
-                NotificationChannel.KAKAO,
-                employee.getPhone(),
-                NotificationTemplate.CONTRACT_SIGN_REQUEST.getCode(),
-                variables
-        );
-
         return toDto(savedContract);
     }
 
@@ -272,21 +260,6 @@ public class ContractService {
         variables.put("position", employee.getJobLevel());
         variables.put("startDate", savedContract.getCreatedAt().toString());
         variables.put("signCompleteDate", LocalDate.now().toString());
-
-        // 작성자에게 알림 전송
-        notificationService.sendNotification(
-                NotificationChannel.KAKAO,
-                creator.getPhone(),
-                NotificationTemplate.CONTRACT_SIGN_COMPLETE.getCode(),
-                variables
-        );
-        // 서명자에게 알림 전송
-        notificationService.sendNotification(
-                NotificationChannel.KAKAO,
-                employee.getPhone(),
-                NotificationTemplate.CONTRACT_SIGN_COMPLETE.getCode(),
-                variables
-        );
 
         log.info("계약서 ID {} 완료 처리 및 PDF 생성 완료", id);
         return toDto(savedContract);
@@ -355,14 +328,6 @@ public class ContractService {
         variables.put("rejectionReason", reason.trim());
         variables.put("rejectorName", employee.getUserName()); // 반려자는 직원 본인
         variables.put("rejectionDateTime", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
-
-        // 작성자(관리자)에게 알림 전송
-        notificationService.sendNotification(
-                NotificationChannel.KAKAO,
-                creator.getPhone(),
-                NotificationTemplate.CONTRACT_REJECTION.getCode(),
-                variables
-        );
 
         log.info("계약서 ID {} 반려 처리됨, 사유: {}", id, reason);
         return toDto(savedContract);
@@ -561,10 +526,26 @@ public class ContractService {
         dto.setRejectionReason(c.getRejectionReason());
 
         UserEntity creator = userMap.get(dto.getCreatorId());
-        if (creator != null) dto.setCreatorName(creator.getUserName());
+        if (creator != null) {
+            dto.setCreatorName(creator.getUserName());
+        }
 
         UserEntity employee = userMap.get(dto.getEmployeeId());
-        if (employee != null) dto.setEmployeeName(employee.getUserName());
+        if (employee != null) {
+            dto.setEmployeeName(employee.getUserName());
+            dto.setEmployeeDeptCode(employee.getDeptCode());
+
+            // ✅ Department 이름 안전하게 가져오기 (try-catch 추가)
+            try {
+                if (employee.getDepartment() != null &&
+                        org.hibernate.Hibernate.isInitialized(employee.getDepartment())) {
+                    dto.setEmployeeDeptName(employee.getDepartment().getDeptName());
+                }
+            } catch (Exception e) {
+                log.warn("Department 로딩 실패 for user {}: {}", employee.getUserId(), e.getMessage());
+                dto.setEmployeeDeptName(null);
+            }
+        }
 
         return dto;
     }
@@ -573,8 +554,6 @@ public class ContractService {
     private ContractResponseDto toDto(EmploymentContract c) {
         ContractResponseDto dto = new ContractResponseDto();
         dto.setId(c.getId());
-        dto.setCreatorId(c.getCreator().getUserId());
-        dto.setEmployeeId(c.getEmployee().getUserId());
         dto.setStatus(c.getStatus());
         dto.setContractType(c.getContractType());
         dto.setFormDataJson(c.getFormDataJson());
@@ -584,16 +563,60 @@ public class ContractService {
         dto.setUpdatedAt(c.getUpdatedAt());
         dto.setRejectionReason(c.getRejectionReason());
 
-        // ✅ userRepository.findByUserId() 호출 삭제
+        // ✅ UserEntity 정보 안전하게 복사
         if (c.getCreator() != null) {
             dto.setCreatorId(c.getCreator().getUserId());
             dto.setCreatorName(c.getCreator().getUserName());
         }
+
         if (c.getEmployee() != null) {
-            dto.setEmployeeId(c.getEmployee().getUserId());
-            dto.setEmployeeName(c.getEmployee().getUserName());
+            UserEntity employee = c.getEmployee();
+            dto.setEmployeeId(employee.getUserId());
+            dto.setEmployeeName(employee.getUserName());
+            dto.setEmployeeDeptCode(employee.getDeptCode());
+            dto.setEmployeeJobLevel(employee.getJobLevel());
+            dto.setEmployeeJobType(employee.getJobType());
+            dto.setEmployeePhone(employee.getPhone());
+            dto.setEmployeeAddress(employee.getAddress());
+
+            // ✅ 부서명 안전하게 가져오기 (try-catch 추가)
+            try {
+                if (employee.getDepartment() != null &&
+                        org.hibernate.Hibernate.isInitialized(employee.getDepartment())) {
+                    dto.setEmployeeDeptName(employee.getDepartment().getDeptName());
+                }
+            } catch (Exception e) {
+                log.warn("Department 로딩 실패 for user {}: {}", employee.getUserId(), e.getMessage());
+                dto.setEmployeeDeptName(null);
+            }
         }
 
         return dto;
+    }
+
+    @Transactional
+    public ContractResponseDto rejectCompletedContract(Long id, String adminId, String reason) {
+        EmploymentContract contract = getOrThrow(id);
+
+        // 완료된 상태의 계약서만 관리자가 반려 가능
+        if (contract.getStatus() != ContractStatus.COMPLETED) {
+            throw new IllegalStateException("완료된 계약서만 반려할 수 있습니다.");
+        }
+
+        if (reason == null || reason.trim().isEmpty()) {
+            throw new IllegalArgumentException("반려 사유를 입력해주세요.");
+        }
+
+        // 상태를 RETURNED_TO_ADMIN으로 변경 (직원이 반려했을 때와 동일한 상태)
+        contract.setStatus(ContractStatus.RETURNED_TO_ADMIN);
+        contract.setRejectionReason("[관리자 반려] " + reason.trim());
+
+        // PDF 다운로드 및 인쇄 버튼을 비활성화하기 위해 정보 초기화
+        contract.setPrintable(false);
+        contract.setPdfUrl(null);
+
+        log.info("관리자({})가 계약서 {}를 반려함. 사유: {}", adminId, id, reason);
+
+        return toDto(repo.save(contract));
     }
 }

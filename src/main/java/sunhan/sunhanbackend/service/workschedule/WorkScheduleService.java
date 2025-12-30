@@ -39,6 +39,8 @@ import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleTemplateRe
 import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
@@ -63,6 +65,7 @@ public class WorkScheduleService {
     private final DeptDutyConfigRepository dutyConfigRepository;
     private final DepartmentRepository departmentRepository;
     private final WorkScheduleTemplateRepository templateRepository;
+    private final DeptDutyConfigRepository deptDutyConfigRepository;
 
     @Value("${holiday.api.key}")
     private String holidayApiKey;
@@ -84,12 +87,12 @@ public class WorkScheduleService {
         if (!user.getDeptCode().equals(deptCode)) {
             throw new SecurityException("본인 부서의 근무표만 생성할 수 있습니다.");
         }
+
         Set<PermissionType> permissions = permissionService.getAllUserPermissions(creatorId);
-        boolean hasWorkSchedulePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
-        int jobLevel = Integer.parseInt(user.getJobLevel());
-        boolean isDeptHead = jobLevel == 1;
-        if (!hasWorkSchedulePermission && !isDeptHead) {
-            throw new SecurityException("근무표를 생성할 권한이 없습니다. (부서장 또는 권한자만)");
+        boolean hasCreatePermission = permissions.contains(PermissionType.WORK_SCHEDULE_CREATE);
+
+        if (!hasCreatePermission) {
+            throw new SecurityException("근무표를 생성할 권한이 없습니다.");
         }
 
         // === 활성 레코드(즉, isActive = true)만 검사 ===
@@ -154,8 +157,8 @@ public class WorkScheduleService {
             }
 
             // 2. JobLevel이 같으면 휴가 개수 비교 (내림차순/많은 순)
-            Integer aTotal = a.getTotalVacationDays() != null ? a.getTotalVacationDays() : 0;
-            Integer bTotal = b.getTotalVacationDays() != null ? b.getTotalVacationDays() : 0;
+            Double aTotal = a.getTotalVacationDays() != null ? a.getTotalVacationDays() : 0;
+            Double bTotal = b.getTotalVacationDays() != null ? b.getTotalVacationDays() : 0;
             return bTotal.compareTo(aTotal); // 내림차순
         });
 
@@ -218,6 +221,7 @@ public class WorkScheduleService {
         // 1. 현재 부서의 모든 사용자 ID 조회
         List<String> currentDeptUserIds = userRepository.findByDeptCodeAndUseFlag(schedule.getDeptCode(), "1")
                 .stream()
+                .filter(u -> !"1".equals(u.getJobType()))
                 .map(UserEntity::getUserId)
                 .collect(Collectors.toList());
 
@@ -294,6 +298,7 @@ public class WorkScheduleService {
         // 1. 현재 부서의 모든 사용자 ID 조회 (Active User)
         Set<String> currentDeptUserIds = userRepository.findByDeptCodeAndUseFlag(schedule.getDeptCode(), "1")
                 .stream()
+                .filter(u -> !"1".equals(u.getJobType()))
                 .map(UserEntity::getUserId)
                 .collect(Collectors.toSet());
 
@@ -373,7 +378,6 @@ public class WorkScheduleService {
             safeUserMap.put(uid, minimal);
         }
 
-
         // ✅ 부서명 조회 - Department 테이블에서 직접 조회
         String deptName;
         if (schedule.getIsCustom() != null && schedule.getIsCustom()) {
@@ -451,26 +455,35 @@ public class WorkScheduleService {
                 // 서명 완료 여부
                 stepInfo.put("isSigned", currentStep != null && currentStep > step.getStepOrder());
 
-                // ✅ 서명 완료 여부 - History에서 확인
-                ApprovalStepHistory stepHistory = historyRepository
-                        .findByApprovalProcessIdAndStepOrderAndAction(
+                List<ApprovalStepHistory> histories = historyRepository
+                        .findByApprovalProcessIdAndStepOrderAndActionIn(
                                 process.getId(),
                                 step.getStepOrder(),
-                                ApprovalAction.APPROVED
-                        )
+                                Arrays.asList(ApprovalAction.APPROVED, ApprovalAction.FINAL_APPROVED)
+                        );
+                ApprovalStepHistory stepHistory = histories.stream()
+                        .max(Comparator.comparing(ApprovalStepHistory::getActionDate))
                         .orElse(null);
 
                 boolean isSigned = stepHistory != null;
                 stepInfo.put("isSigned", isSigned);
 
-                // ✅ 서명 이미지 - History에서 가져오기
-                if (isSigned && stepHistory.getSignatureImageUrl() != null) {
+                boolean isFinalApproved = stepHistory != null &&
+                        stepHistory.getAction() == ApprovalAction.FINAL_APPROVED;
+                stepInfo.put("isFinalApproved", isFinalApproved);
+
+// ✅ 서명 이미지 - History에서 가져오기 (전결 시에도 표시)
+                if (stepHistory != null && stepHistory.getSignatureImageUrl() != null) {
                     stepInfo.put("signatureUrl", stepHistory.getSignatureImageUrl());
                     stepInfo.put("signedAt", stepHistory.getActionDate() != null ?
                             stepHistory.getActionDate().toString() : null);
                 } else {
                     stepInfo.put("signatureUrl", null);
                     stepInfo.put("signedAt", null);
+                }
+
+                if (isFinalApproved) {
+                    stepInfo.put("finalApprovedBy", stepHistory.getComment()); // "전결 처리 by [name]"
                 }
 
                 // ✅ process가 null인 경우 반려 정보 조회 불가
@@ -591,46 +604,57 @@ public class WorkScheduleService {
      */
     private void validateScheduleDetailAccess(String userId, WorkSchedule schedule) {
         UserEntity user = userRepository.findByUserId(userId)
-                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다. "));
-
-        String userDeptCode = user.getDeptCode();
-        String scheduleDeptCode = schedule.getDeptCode();
-
-        // ✅ [1] 작성자는 모든 상태에서 조회 가능
-        if (schedule.getCreatedBy(). equals(userId)) {
-            return;
-        }
+                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
 
         WorkSchedule.ScheduleStatus status = schedule.getApprovalStatus();
 
-        // ✅ [2] DRAFT 상태: 작성자만 (위에서 확인했으므로 거부)
-        if (status == WorkSchedule.ScheduleStatus. DRAFT) {
-            throw new SecurityException("임시저장 상태는 작성자만 조회할 수 있습니다.");
+        // [1] 작성자는 모든 상태에서 조회 가능
+        if (schedule.getCreatedBy().equals(userId)) {
+            return;
         }
 
-        // ✅ [3] SUBMITTED 상태: 현재 단계 결재자만 추가로 가능
-        if (status == WorkSchedule.ScheduleStatus. SUBMITTED) {
+        // [2] DRAFT, SUBMITTED, REJECTED: 작성자만 조회 가능
+        if (status == WorkSchedule.ScheduleStatus.DRAFT ||
+                status == WorkSchedule.ScheduleStatus.REJECTED) {
+            throw new SecurityException("이 문서는 작성자만 조회할 수 있습니다.");
+        }
+
+        // [3] SUBMITTED: 현재 결재자만 추가 조회 가능
+        if (status == WorkSchedule.ScheduleStatus.SUBMITTED) {
             if (isCurrentApprover(userId, schedule)) {
-                return; // 현재 단계 결재자는 조회 가능
+                return;
             }
-            throw new SecurityException("제출된 상태는 현재 결재자만 조회할 수 있습니다.");
+            throw new SecurityException("제출된 문서는 현재 결재자만 조회할 수 있습니다.");
         }
 
-        // ✅ [4] APPROVED 상태: 같은 부서원만 (결재자 제외!)
-        if (status == WorkSchedule.ScheduleStatus. APPROVED) {
-            if (userDeptCode != null && userDeptCode.equals(scheduleDeptCode)) {
-                return; // 같은 부서원은 조회 가능
+        // [4] APPROVED: 부서원 또는 참여자만 조회 가능
+        if (status == WorkSchedule.ScheduleStatus.APPROVED) {
+            // 관리 권한 확인
+            if (permissionService.hasPermission(userId, PermissionType.WORK_SCHEDULE_MANAGE)) {
+                return;
             }
-            // ✅ 결재자는 여기서 제외 - 더 이상 조회 권한 없음
-            throw new SecurityException("완료된 근무표는 같은 부서원만 조회할 수 있습니다.");
+
+            // 같은 부서원 (일반 근무표)
+            if (!Boolean.TRUE.equals(schedule.getIsCustom()) &&
+                    user.getDeptCode() != null &&
+                    user.getDeptCode().equals(schedule.getDeptCode())) {
+                return;
+            }
+
+            // 커스텀 근무표 참여자
+            if (Boolean.TRUE.equals(schedule.getIsCustom())) {
+                boolean isParticipant = entryRepository
+                        .findByWorkScheduleIdAndUserId(schedule.getId(), userId)
+                        .filter(e -> !e.getIsDeleted())
+                        .isPresent();
+                if (isParticipant) {
+                    return;
+                }
+            }
+
+            throw new SecurityException("완료된 문서를 조회할 권한이 없습니다.");
         }
 
-        // ✅ [5] REJECTED 상태: 작성자만
-        if (status == WorkSchedule. ScheduleStatus.REJECTED) {
-            throw new SecurityException("반려된 상태는 작성자만 조회할 수 있습니다.");
-        }
-
-        // 그 외 상태
         throw new SecurityException("근무표를 조회할 권한이 없습니다.");
     }
 
@@ -663,31 +687,41 @@ public class WorkScheduleService {
         WorkSchedule schedule = scheduleRepository.findById(scheduleId)
                 .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
-        // 권한 및 상태 검증
-        if (!schedule.getCreatedBy().equals(userId)) {
-            throw new SecurityException("작성자 서명 권한이 없습니다.");
-        }
-        if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT &&
-                schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED) {
-            throw new IllegalStateException("임시저장 또는 승인된 상태에서만 서명 변경이 가능합니다.");
-        }
+        // ✅ [수정] 권한 검증 로직
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(userId);
+        boolean hasManagePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+        boolean isCreator = schedule.getCreatedBy().equals(userId);
 
-
-        if (isSigned) {
-            // 서명 처리
-            UserEntity user = userRepository.findByUserId(userId)
-                    .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
-
-            if (user.getSignimage() != null) {
-                String signatureUrl = "data:image/png;base64," +
-                        Base64.getEncoder().encodeToString(user.getSignimage());
-                schedule.setCreatorSignatureUrl(signatureUrl);
-                schedule.setCreatorSignedAt(LocalDateTime.now());
+        // DRAFT: 작성자만
+        if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.DRAFT) {
+            if (!isCreator) {
+                throw new SecurityException("임시저장 상태는 작성자만 서명할 수 있습니다.");
             }
-        } else {
-            // 서명 취소 (초기화)
-            schedule.setCreatorSignatureUrl(null);
-            schedule.setCreatorSignedAt(null);
+
+            // ✅ [핵심] 작성자가 본인 서명만 가능
+            if (isSigned) {
+                UserEntity user = userRepository.findByUserId(userId)
+                        .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
+
+                if (user.getSignimage() != null) {
+                    String signatureUrl = "data:image/png;base64," +
+                            Base64.getEncoder().encodeToString(user.getSignimage());
+                    schedule.setCreatorSignatureUrl(signatureUrl);
+                    schedule.setCreatorSignedAt(LocalDateTime.now());
+                }
+            } else {
+                schedule.setCreatorSignatureUrl(null);
+                schedule.setCreatorSignedAt(null);
+            }
+        }
+        // APPROVED: WORK_SCHEDULE_MANAGE 권한이 있어도 작성자 서명은 건드리지 않음
+        else if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.APPROVED) {
+            // ✅ [핵심] 승인된 상태에서는 작성자 서명을 변경하지 않음
+            log.warn("승인된 근무표의 작성자 서명은 변경할 수 없습니다. scheduleId={}", scheduleId);
+            return; // 아무 작업도 하지 않고 종료
+        }
+        else {
+            throw new IllegalStateException("현재 상태에서는 서명을 변경할 수 없습니다.");
         }
 
         scheduleRepository.save(schedule);
@@ -708,16 +742,28 @@ public class WorkScheduleService {
      * 근무표 수정 가능 여부 검증
      */
     private void validateScheduleEditable(WorkSchedule schedule, String userId) {
-        if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.APPROVED) {
-            // 작성자인 경우 승인 상태여도 수정 허용 -> 여기서는 예외를 던지지 않고 넘어감
-        } else if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT) {
-            // DRAFT도 아니고 APPROVED도 아니면 (즉, SUBMITTED, REVIEWED 등) 수정 불가
-            throw new IllegalStateException("현재 상태에서는 수정할 수 없습니다.");
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(userId);
+        boolean hasManagePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+        boolean isCreator = schedule.getCreatedBy().equals(userId);
+
+        // ✅ DRAFT: 작성자만 수정 가능
+        if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.DRAFT) {
+            if (!isCreator) {
+                throw new SecurityException("임시저장 상태는 작성자만 수정할 수 있습니다.");
+            }
+            return;
         }
 
-        if (!schedule.getCreatedBy().equals(userId)) {
-            throw new SecurityException("근무표를 수정할 권한이 없습니다.");
+        // ✅ APPROVED: WORK_SCHEDULE_MANAGE 권한만 확인 (작성자 체크 제거)
+        if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.APPROVED) {
+            if (!hasManagePermission) {
+                throw new SecurityException("승인된 근무표는 WORK_SCHEDULE_MANAGE 권한이 있는 사용자만 수정할 수 있습니다.");
+            }
+            return;
         }
+
+        // ✅ 그 외 상태(SUBMITTED, REVIEWED 등)는 수정 불가
+        throw new IllegalStateException("현재 상태에서는 수정할 수 없습니다.");
     }
 
     @Transactional
@@ -847,44 +893,39 @@ public class WorkScheduleService {
             // 권한 및 상태 검증
             WorkSchedule schedule = scheduleRepository.findById(scheduleId)
                     .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
-            removeObsoleteEntriesIfNecessary(schedule);
-            addNewEntriesIfNecessary(schedule);
 
-            // ✅ DRAFT 상태이고 작성자만 편집 가능
-            WorkSchedule.ScheduleStatus status = schedule.getApprovalStatus();
-            if (status != WorkSchedule.ScheduleStatus.DRAFT && status != WorkSchedule.ScheduleStatus.APPROVED) {
-                throw new IllegalStateException("작성 중이거나 승인된 상태에서만 수정할 수 있습니다.");
+            if (!Boolean.TRUE.equals(schedule.getIsCustom())) {
+                removeObsoleteEntriesIfNecessary(schedule);
+                addNewEntriesIfNecessary(schedule);
             }
 
-            if (! schedule.getCreatedBy().equals(userId)) {
-                throw new SecurityException("작성자만 근무표를 수정할 수 있습니다.");
-            }
+            // ✅ [수정] validateScheduleEditable 메서드 사용
+            validateScheduleEditable(schedule, userId);
 
             for (Map<String, Object> update : updates) {
                 Long entryId = Long.valueOf(update.get("entryId").toString());
                 String workDataJson = objectMapper.writeValueAsString(update.get("workData"));
 
-                // ❌ 문제의 발생 지점 수정: orElseThrow 대신 null 체크로 대체 (이미 있음, 유지)
                 WorkScheduleEntry entry = entryRepository.findById(entryId).orElse(null);
                 if (entry == null) {
                     log.warn("업데이트 목록에 포함된 엔트리 ID {}는 DB에 존재하지 않아 스킵합니다 (삭제된 엔트리일 수 있음).", entryId);
-                    continue; // 다음 업데이트 항목으로 넘어갑니다.
+                    continue;
                 }
 
                 entry.setWorkDataJson(workDataJson);
 
-                // ✅ 새로 추가: positionId 업데이트
+                // positionId 업데이트
                 if (update.containsKey("positionId")) {
                     Long positionId = update.get("positionId") != null ? Long.valueOf(update.get("positionId").toString()) : null;
                     entry.setPositionId(positionId);
                 }
 
-                // ✅ remarks도 이미 처리됨 (유지)
+                // remarks 처리
                 if (update.containsKey("remarks")) {
                     entry.setRemarks((String) update.get("remarks"));
                 }
 
-                // 통계 계산 및 저장 (유지)
+                // 통계 계산 및 저장
                 calculateStatistics(entry);
                 schedule.setUpdatedAt(LocalDateTime.now());
                 entryRepository.save(entry);
@@ -1183,15 +1224,7 @@ public class WorkScheduleService {
 
         WorkSchedule schedule = entry.getWorkSchedule();
 
-        // ✅ DRAFT 상태 or APPROVED 상태 + 작성자만 수정 가능
-        WorkSchedule.ScheduleStatus status = schedule.getApprovalStatus();
-        if (status != WorkSchedule.ScheduleStatus.DRAFT && status != WorkSchedule.ScheduleStatus.APPROVED) {
-            throw new IllegalStateException("작성 중이거나 승인된 상태에서만 수정할 수 있습니다.");
-        }
-
-        if (!schedule.getCreatedBy().equals(userId)) {
-            throw new SecurityException("작성자만 수정할 수 있습니다.");
-        }
+        validateScheduleEditable(schedule, userId);
 
         entry.setNightDutyRequired(requiredCount != null ? requiredCount : 0);
 
@@ -1212,9 +1245,9 @@ public class WorkScheduleService {
                 .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
         validateScheduleEditable(schedule, userId);
-        // 수정(임시저장)이 일어날 때 신규 부서원을 추가합니다.
-        // 기존 엔트리 업데이트 전에 실행하여 신규 엔트리가 DB에 생성되도록 합니다.
-        addNewEntriesIfNecessary(schedule);
+        if (!Boolean.TRUE.equals(schedule.getIsCustom())) {
+            addNewEntriesIfNecessary(schedule);
+        }
 
         for (Map.Entry<Long, Integer> entry : entryRequiredMap.entrySet()) {
             Long entryId = entry.getKey();
@@ -1268,13 +1301,11 @@ public class WorkScheduleService {
         UserEntity user = userRepository.findByUserId(creatorId)
                 .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
 
-        // 권한 검증
+        // ✅ 권한 검증 수정
         Set<PermissionType> permissions = permissionService.getAllUserPermissions(creatorId);
-        boolean hasWorkSchedulePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
-        int jobLevel = Integer.parseInt(user.getJobLevel());
-        boolean isDeptHead = jobLevel >= 1;
+        boolean hasCreatePermission = permissions.contains(PermissionType.WORK_SCHEDULE_CREATE);
 
-        if (!hasWorkSchedulePermission && !isDeptHead) {
+        if (!hasCreatePermission) {
             throw new SecurityException("근무표를 생성할 권한이 없습니다.");
         }
 
@@ -1395,13 +1426,24 @@ public class WorkScheduleService {
         WorkSchedule schedule = scheduleRepository.findById(scheduleId)
                 .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
-        // 권한 확인
-        if (!schedule.getCreatedBy().equals(requestUserId)) {
-            throw new SecurityException("근무표를 수정할 권한이 없습니다.");
-        }
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(requestUserId);
+        boolean hasManagePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+        boolean isCreator = schedule.getCreatedBy().equals(requestUserId);
 
-        if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT &&
-                schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED) {
+        // ✅ DRAFT: 작성자만
+        if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.DRAFT) {
+            if (!isCreator) {
+                throw new SecurityException("임시저장 상태는 작성자만 인원을 추가할 수 있습니다.");
+            }
+        }
+        // ✅ APPROVED: 인사팀만
+        else if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.APPROVED) {
+            if (!hasManagePermission) {
+                throw new SecurityException("승인된 근무표는 인사팀만 인원을 추가할 수 있습니다.");
+            }
+        }
+        // ✅ 그 외 상태는 불가
+        else {
             throw new IllegalStateException("현재 상태에서는 인원을 추가할 수 없습니다.");
         }
 
@@ -1441,12 +1483,24 @@ public class WorkScheduleService {
         WorkSchedule schedule = scheduleRepository.findById(scheduleId)
                 .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
 
-        if (!schedule.getCreatedBy().equals(requestUserId)) {
-            throw new SecurityException("근무표를 수정할 권한이 없습니다.");
-        }
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(requestUserId);
+        boolean hasManagePermission = permissions.contains(PermissionType.WORK_SCHEDULE_MANAGE);
+        boolean isCreator = schedule.getCreatedBy().equals(requestUserId);
 
-        if (schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.DRAFT &&
-                schedule.getApprovalStatus() != WorkSchedule.ScheduleStatus.APPROVED) {
+        // ✅ DRAFT: 작성자만
+        if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.DRAFT) {
+            if (!isCreator) {
+                throw new SecurityException("임시저장 상태는 작성자만 인원을 삭제할 수 있습니다.");
+            }
+        }
+        // ✅ APPROVED: 인사팀만
+        else if (schedule.getApprovalStatus() == WorkSchedule.ScheduleStatus.APPROVED) {
+            if (!hasManagePermission) {
+                throw new SecurityException("승인된 근무표는 인사팀만 인원을 삭제할 수 있습니다.");
+            }
+        }
+        // ✅ 그 외 상태는 불가
+        else {
             throw new IllegalStateException("현재 상태에서는 인원을 삭제할 수 없습니다.");
         }
 
@@ -1461,5 +1515,243 @@ public class WorkScheduleService {
         }
     }
 
+    /**
+     * 특정 달 데이터 복사
+     */
+    @Transactional
+    public void copyFromSpecificMonth(Long newScheduleId, String sourceYearMonth) {
+        log.info("데이터 복사 시작: newScheduleId={}, sourceYearMonth={}", newScheduleId, sourceYearMonth);
 
+        WorkSchedule newSchedule = scheduleRepository.findById(newScheduleId)
+                .orElseThrow(() -> new EntityNotFoundException("새 근무표를 찾을 수 없습니다."));
+
+        Optional<WorkSchedule> sourceScheduleOpt;
+        if (Boolean.TRUE.equals(newSchedule.getIsCustom())) {
+            sourceScheduleOpt = scheduleRepository.findByCreatedByAndScheduleYearMonthAndIsCustomAndApprovalStatus(
+                    newSchedule.getCreatedBy(), sourceYearMonth, true, WorkSchedule.ScheduleStatus.APPROVED);
+            log.debug("커스텀 모드 조회: createdBy={}", newSchedule.getCreatedBy());
+        } else {
+            sourceScheduleOpt = scheduleRepository.findByScheduleYearMonthAndDeptCodeAndApprovalStatus(
+                    sourceYearMonth, newSchedule.getDeptCode(), WorkSchedule.ScheduleStatus.APPROVED);
+            log.debug("일반 모드 조회: deptCode={}", newSchedule.getDeptCode());
+        }
+
+        if (sourceScheduleOpt.isEmpty()) {
+            log.warn("원본 근무표 없음: sourceYearMonth={}", sourceYearMonth);
+            throw new EntityNotFoundException("지정된 달의 승인된 근무표가 없습니다: " + sourceYearMonth);
+        }
+
+        WorkSchedule sourceSchedule = sourceScheduleOpt.get();
+
+        // ✅ 수정: 기존 설정 확인 후 업데이트 또는 생성
+        DeptDutyConfig sourceConfig = dutyConfigRepository.findByScheduleId(sourceSchedule.getId())
+                .orElse(null);
+
+        if (sourceConfig != null) {
+            // ✅ 새 근무표에 이미 설정이 있는지 확인
+            DeptDutyConfig existingConfig = dutyConfigRepository.findByScheduleId(newScheduleId)
+                    .orElse(null);
+
+            if (existingConfig != null) {
+                // ✅ 기존 설정 업데이트
+                existingConfig.setDutyMode(sourceConfig.getDutyMode());
+                existingConfig.setDisplayName(sourceConfig.getDisplayName());
+                existingConfig.setCellSymbol(sourceConfig.getCellSymbol());
+                existingConfig.setUseWeekday(sourceConfig.getUseWeekday());
+                existingConfig.setUseFriday(sourceConfig.getUseFriday());
+                existingConfig.setUseSaturday(sourceConfig.getUseSaturday());
+                existingConfig.setUseHolidaySunday(sourceConfig.getUseHolidaySunday());
+                dutyConfigRepository.save(existingConfig);
+                log.info("기존 당직 설정 업데이트: scheduleId={}", newScheduleId);
+            } else {
+                // ✅ 새 설정 생성
+                DeptDutyConfig newConfig = new DeptDutyConfig();
+                newConfig.setScheduleId(newScheduleId);
+                newConfig.setDutyMode(sourceConfig.getDutyMode());
+                newConfig.setDisplayName(sourceConfig.getDisplayName());
+                newConfig.setCellSymbol(sourceConfig.getCellSymbol());
+                newConfig.setUseWeekday(sourceConfig.getUseWeekday());
+                newConfig.setUseFriday(sourceConfig.getUseFriday());
+                newConfig.setUseSaturday(sourceConfig.getUseSaturday());
+                newConfig.setUseHolidaySunday(sourceConfig.getUseHolidaySunday());
+                dutyConfigRepository.save(newConfig);
+                log.info("새 당직 설정 생성: scheduleId={}", newScheduleId);
+            }
+        }
+
+        List<WorkScheduleEntry> sourceEntries = entryRepository.findByWorkScheduleIdOrderByDisplayOrderAsc(sourceSchedule.getId());
+
+        sourceEntries.stream()
+                .filter(entry -> !entry.getIsDeleted())
+                .forEach(sourceEntry -> {
+                    entryRepository.findByWorkScheduleIdAndUserId(newSchedule.getId(), sourceEntry.getUserId())
+                            .ifPresent(newEntry -> {
+                                newEntry.setPositionId(sourceEntry.getPositionId());
+                                newEntry.setWorkDataJson(sourceEntry.getWorkDataJson());
+                                newEntry.setNightDutyRequired(sourceEntry.getNightDutyRequired());
+                                newEntry.setRemarks(sourceEntry.getRemarks());
+                                entryRepository.save(newEntry);
+                                log.debug("엔트리 복사: userId={}", sourceEntry.getUserId());
+                            });
+                });
+
+        updateScheduleStatistics(newSchedule.getId());
+        log.info("데이터 복사 완료: newScheduleId={}, sourceYearMonth={}", newScheduleId, sourceYearMonth);
+    }
+
+    /**
+     * 근무표 통계 업데이트 (nightDutyActual, offCount, vacation 등 재계산)
+     */
+    private void updateScheduleStatistics(Long scheduleId) {
+        log.info("통계 업데이트 시작: scheduleId={}", scheduleId);
+
+        WorkSchedule schedule = scheduleRepository.findById(scheduleId)
+                .orElseThrow(() -> new EntityNotFoundException("근무표를 찾을 수 없습니다."));
+
+        List<WorkScheduleEntry> entries = entryRepository.findByWorkScheduleIdOrderByDisplayOrderAsc(scheduleId);
+
+        // DeptDutyConfig 조회
+        DeptDutyConfig config = deptDutyConfigRepository.findByScheduleId(scheduleId)
+                .orElseGet(() -> new DeptDutyConfig()); // 기본값
+
+        // 휴일 목록 가져오기 (year 기반)
+        String year = schedule.getScheduleYearMonth().substring(0, 4);
+        List<String> holidays = getHolidays(Integer.parseInt(year)); // YYYY-MM-DD 형식
+
+        for (WorkScheduleEntry entry : entries) {
+            if (entry.getIsDeleted()) continue;
+
+            // workDataJson 파싱
+            Map<String, String> workData = new HashMap<>();
+            if (entry.getWorkDataJson() != null) {
+                try {
+                    workData = objectMapper.readValue(entry.getWorkDataJson(), new TypeReference<Map<String, String>>() {});
+                } catch (JsonProcessingException e) {
+                    log.error("workDataJson 파싱 실패: entryId={}", entry.getId(), e);
+                    continue;
+                }
+            }
+
+            // nightDutyActual 계산 (기본: 심볼 개수)
+            String symbol = config.getCellSymbol() != null ? config.getCellSymbol() : "N";
+            int nightActual = (int) workData.values().stream().filter(v -> symbol.equals(v)).count();
+
+            // ON_CALL_DUTY 모드 시 dutyDetailJson 재계산 및 nightActual = 합계
+            Map<String, Integer> dutyDetails = new HashMap<>();
+            if (config.getDutyMode() == DeptDutyConfig.DutyMode.ON_CALL_DUTY) {
+                dutyDetails.put("평일", 0);
+                dutyDetails.put("금요일", 0);
+                dutyDetails.put("토요일", 0);
+                dutyDetails.put("공휴일 및 일요일", 0);
+
+                int ymYear = Integer.parseInt(schedule.getScheduleYearMonth().substring(0, 4));
+                int ymMonth = Integer.parseInt(schedule.getScheduleYearMonth().substring(5, 7));
+
+                for (Map.Entry<String, String> wd : workData.entrySet()) {
+                    if (!symbol.equals(wd.getValue())) continue;
+
+                    int day = Integer.parseInt(wd.getKey());
+                    LocalDate date = LocalDate.of(ymYear, ymMonth, day);
+                    String dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE);
+                    DayOfWeek dow = date.getDayOfWeek();
+
+                    boolean isHoliday = holidays.contains(dateStr);
+
+                    if (isHoliday || dow == DayOfWeek.SUNDAY) {
+                        if (Boolean.TRUE.equals(config.getUseHolidaySunday())) {
+                            dutyDetails.put("공휴일 및 일요일", dutyDetails.get("공휴일 및 일요일") + 1);
+                        }
+                    } else if (dow == DayOfWeek.SATURDAY) {
+                        if (Boolean.TRUE.equals(config.getUseSaturday())) {
+                            dutyDetails.put("토요일", dutyDetails.get("토요일") + 1);
+                        }
+                    } else if (dow == DayOfWeek.FRIDAY) {
+                        if (Boolean.TRUE.equals(config.getUseFriday())) {
+                            dutyDetails.put("금요일", dutyDetails.get("금요일") + 1);
+                        }
+                    } else { // 월~목 (평일)
+                        if (Boolean.TRUE.equals(config.getUseWeekday())) {
+                            dutyDetails.put("평일", dutyDetails.get("평일") + 1);
+                        }
+                    }
+                }
+
+                // nightActual = 요일별 합계
+                nightActual = dutyDetails.values().stream().mapToInt(Integer::intValue).sum();
+
+                // dutyDetailJson 저장
+                try {
+                    entry.setDutyDetailJson(objectMapper.writeValueAsString(dutyDetails));
+                } catch (JsonProcessingException e) {
+                    log.error("dutyDetailJson 생성 실패: entryId={}", entry.getId(), e);
+                }
+            } else {
+                entry.setDutyDetailJson(null); // NIGHT_SHIFT 모드 시 클리어
+            }
+
+            entry.setNightDutyActual(nightActual);
+            entry.setNightDutyAdditional(nightActual - (entry.getNightDutyRequired() != null ? entry.getNightDutyRequired() : 0));
+
+            // offCount
+            int offCount = (int) workData.values().stream().filter(v -> "Off".equals(v)).count();
+            entry.setOffCount(offCount);
+
+            // vacationUsedThisMonth ( "연" 또는 "연0.5" 등)
+            double vacationThisMonth = workData.values().stream()
+                    .filter(v -> v != null && v.startsWith("연"))
+                    .mapToDouble(v -> {
+                        if (v.length() > 1) {
+                            try {
+                                return Double.parseDouble(v.substring(1));
+                            } catch (NumberFormatException e) {
+                                return 1.0;
+                            }
+                        }
+                        return 1.0;
+                    })
+                    .sum();
+            entry.setVacationUsedThisMonth(vacationThisMonth);
+
+            // vacationUsedTotal: 다른 달 합계 + 이번 달
+            String yearStr = schedule.getScheduleYearMonth().substring(0, 4);
+            Double usedExcluding = entryRepository.sumApprovedVacationByUserIdAndYearExcludingCurrent(
+                    entry.getUserId(), yearStr, scheduleId);
+            entry.setVacationUsedTotal(usedExcluding != null ? usedExcluding + vacationThisMonth : vacationThisMonth);
+
+            // vacationTotal: 기본값
+            entry.setVacationTotal(entry.getVacationTotal() != null ? entry.getVacationTotal() : 15.0);
+
+            entryRepository.save(entry);
+        }
+
+        log.info("통계 업데이트 완료: scheduleId={}", scheduleId);
+    }
+
+    /**
+     * 연도별 공휴일 목록 가져오기 (HolidayController 기반)
+     */
+    private List<String> getHolidays(int year) {
+        try {
+            String url = String.format(
+                    "%s?serviceKey=%s&solYear=%d&numOfRows=100&_type=json",
+                    holidayApiUrl, holidayApiKey, year
+            );
+            String response = restTemplate.getForObject(url, String.class);
+
+            // JSON 파싱 (예: response에서 item.locdate 추출, YYYYMMDD → YYYY-MM-DD)
+            Map<String, Object> json = objectMapper.readValue(response, new TypeReference<Map<String, Object>>() {});
+            Map<String, Object> body = (Map<String, Object>) ((Map<String, Object>) json.get("response")).get("body");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) ((Map<String, Object>) body.get("items")).get("item");
+
+            return items.stream()
+                    .map(item -> {
+                        String locdate = item.get("locdate").toString();
+                        return locdate.substring(0, 4) + "-" + locdate.substring(4, 6) + "-" + locdate.substring(6, 8);
+                    })
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            log.error("공휴일 조회 실패: year={}", year, e);
+            return Collections.emptyList();
+        }
+    }
 }
