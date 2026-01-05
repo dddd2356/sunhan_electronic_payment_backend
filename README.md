@@ -18,9 +18,92 @@
 
 ---
 
-##  <img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/00affb73-0406-459e-a4f9-714de8956a95" /> 시스템 아키텍처
+## 📐 시스템 아키텍처
 
-![image.png](attachment:0c519154-16f1-4415-932d-ba3a9da64801:image.png)
+```mermaid
+flowchart LR
+
+%% ===== Client =====
+subgraph Client [💻 Client Side]
+  direction TB
+  Browser[Web Browser]
+  Frontend[⚛️ React Frontend]
+  Browser --> Frontend
+end
+
+%% ===== External API =====
+subgraph External [🌐 External APIs]
+  direction TB
+  AddressAPI[📮 Address Search API]
+  HolidayAPI[📅 Public Data Portal API]
+end
+
+%% ===== Server =====
+subgraph Server [⚙️ Application Server]
+  direction TB
+  
+  subgraph SpringBoot [🍃 Spring Boot Backend]
+    direction TB
+    
+    %% Domain Services Group
+    subgraph Domain [📦 Domain Services]
+        direction TB
+        Auth[🔐 Auth / User Profile]
+        Contract[📄 Contract Mgmt]
+        Approval[🔁 Approval System]
+        Leave[🌴 Leave Application]
+        Schedule[🕒 Work Schedule]
+        Admin[🛠️ Admin / Sync Logic]
+    end
+  end
+end
+
+%% ===== Database =====
+subgraph Database [💾 Persistence Layer]
+  direction TB
+  MariaDB[(🐬 MariaDB)]
+  Oracle[(🗄️ Oracle HR Legacy)]
+end
+
+%% ===== Wiring / Logic Flow =====
+
+%% 1. User Interaction & Address Search
+Frontend -- API Call (Address Search) --> AddressAPI
+Frontend -- HTTPS / JSON --> SpringBoot
+
+%% 2. Backend to Domain Routing (Conceptual)
+SpringBoot --> Auth
+SpringBoot --> Contract
+SpringBoot --> Approval
+SpringBoot --> Leave
+SpringBoot --> Schedule
+SpringBoot --> Admin
+
+%% 3. Domain Logic & DB Connections
+
+%% (A) Login & Profile Logic
+%% 로그인 시: MariaDB확인 -> 없으면 Oracle 확인
+Auth -- Read/Write --> MariaDB
+Auth -- Read (Initial Check) --> Oracle 
+
+%% (B) Contract Logic
+%% 계약서 작성 시: 프로필 정보는 MariaDB에서 가져옴 (AddressAPI 직접 호출 X)
+Contract -- Read/Write --> MariaDB
+
+%% (C) Schedule Logic
+%% 근무표 생성 시: 공휴일 API 호출 + DB 저장
+Schedule -- Fetch Holidays --> HolidayAPI
+Schedule -- Read/Write --> MariaDB
+
+%% (D) Other Domains
+Approval --> MariaDB
+Leave --> MariaDB
+Admin --> MariaDB
+
+%% (E) Data Sync (Batch)
+%% 새벽 2시 동기화: Oracle -> MariaDB
+Admin -. Daily Sync (2:00 AM) .-> Oracle
+```
 
 ## 🔗 API 명세
 
