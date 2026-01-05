@@ -59,6 +59,24 @@
     -  `GET /api/v1/leave-application/substitutes` : 대리 근무자 목록을 조회합니다.
     -  `GET /api/v1/leave-application/approvals` : 승인 대기 중인 문서 목록을 조회합니다.
     -  `DELETE /api/v1/leave-application/{id}` : 특정 휴가 신청서를 삭제합니다.
+ 
+-   **근무표 관리
+    -   `GET /api/v1/work-schedule` : 근무표 목록 조회 (년/월/부서 필터링).
+    -   `POST /api/v1/work-schedule` : 새 근무표 생성.
+    -   `GET /api/v1/work-schedule/{scheduleId}` : 근무표 상세 정보 조회.
+    -   `POST /api/v1/work-schedule/{scheduleId}/entries` : 근무표 상세 내용(직원별 근무) 일괄 저장.
+    -   `PUT /api/v1/work-schedule/{scheduleId}/status` : 근무표 상태 변경 (작성중, 승인대기 등).
+    -   `GET /api/v1/work-schedule/my-draft` : 내가 작성 중인 임시 저장 문서 조회.
+    -   `GET /api/v1/work-schedule/entries/department` : 부서별 월간 근무 현황 데이터 조회.
+    -   `GET /api/v1/dept-duty-config/schedule/{scheduleId}` : 해당 근무표의 당직/근무 모드 설정 조회.
+    -   `POST /api/v1/dept-duty-config` : 근무표 관련 설정 저장 (초안 상태일 때만 가능).
+
+-   **결재 라인 관리
+    -   `POST /api/v1/approval-lines` : 결재 라인 생성 및 승인 요청.
+    -   `GET /api/v1/approval-lines/candidates` : 결재 승인자 후보 목록 조회 (팀장, 부서장 등).
+    -   `GET /api/v1/approval-lines/document/{documentType}/{documentId}` : 특정 문서의 결재 진행 상황 조회.
+    -   `PUT /api/v1/approval-lines/{lineId}/approve` : 결재 승인 처리.
+    -   `PUT /api/v1/approval-lines/{lineId}/reject` : 결재 반려 처리.
 
 -   **문서 관리**
     - `GET /api/v1/user/reports/documents` : 문서 현황 보고서를 조회하며, 상태별 문서 개수를 반환합니다.
