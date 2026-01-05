@@ -18,6 +18,10 @@
 
 ---
 
+##  <img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/00affb73-0406-459e-a4f9-714de8956a95" /> 시스템 아키텍처
+
+![image.png](attachment:0c519154-16f1-4415-932d-ba3a9da64801:image.png)
+
 ## 🔗 API 명세
 
 ### 주요 API 엔드포인트
