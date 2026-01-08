@@ -60,6 +60,9 @@ dependencies {
 	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
 	//pdf 업로드
 	implementation 'com.openhtmltopdf:openhtmltopdf-pdfbox:1.0.10'
+
+	implementation "org.apache.poi:poi:5.2.3"
+	implementation "org.apache.poi:poi-ooxml:5.2.3"
 }
 
 tasks.named('test') {

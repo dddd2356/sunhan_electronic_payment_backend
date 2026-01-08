@@ -1,5 +1,6 @@
 {
-  "employerName": "선한병원",
+  "contractTitle": "근로계약서【연봉제】",
+  "employerName": "",
   "employerAddress": "광주광역시 서구 무진대로 975(광천동)",
   "employerPhone": "062-466-1000",
   "employeeName": "",
@@ -17,7 +18,6 @@
   "licenseAllowance": "",
   "hazardPay": "",
   "treatmentImprovementExpenses": "",
-  "specialAllowance": "",
   "adjustmentAllowance": "",
   "overtime": "",
   "nDuty": "",

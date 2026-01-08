@@ -11,12 +11,13 @@ import java.util.Map;
 @Setter // Lombok 사용 시 setter 자동 생성
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ContractFormData {
+    public String contractTitle;
     public String employerName, employerAddress, employerPhone;
     public String employeeName, employeeAddress, employeePhone, employeeSSN;
     public String startDate, workTime, contractDate, salaryContractDate;
     public String breakTime, totalAnnualSalary, basicSalary, positionAllowance;
     public String licenseAllowance, hazardPay, treatmentImprovementExpenses;
-    public String specialAllowance, adjustmentAllowance, overtimePay;
+    public String adjustmentAllowance, overtimePay;
     public String nDutyAllowance, regularHourlyWage, employmentOccupation;
     public String dutyNight, receiptConfirmation1, receiptConfirmation2;
     public String writtenDate, employeeSignatureUrl;

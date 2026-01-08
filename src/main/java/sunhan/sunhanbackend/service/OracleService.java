@@ -9,7 +9,9 @@ import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.repository.oracle.OracleRepository;
+import sunhan.sunhanbackend.util.DateUtil;
 
+import java.time.LocalDate;
 import java.util.Optional;
 
 @Slf4j
@@ -37,52 +39,55 @@ public class OracleService {
      * Oracle에서 사용자 정보를 가져와서 MySQL에 저장하는 메서드
      */
     public UserEntity migrateUserFromOracle(String usrId, String password) {
-        // 'administrator' 사용자에 대한 예외 처리
         if ("administrator".equalsIgnoreCase(usrId)) {
-            log.info("administrator 사용자는 Oracle에서 마이그레이션되지 않습니다. MySQL에서 직접 생성됩니다.");
-            // MySQL에 이미 존재하는 경우를 대비하여 반환. 없으면 null 반환
+            log.info("administrator 사용자는 Oracle에서 마이그레이션되지 않습니다.");
             return userRepository.findByUserId(usrId).orElse(null);
         }
 
         try {
-            // 1. Oracle에서 사용자 정보 조회
             OracleEntity oracleUser = getOracleUserInfo(usrId);
 
-            // Oracle 사용자의 useFlag가 '1'(활성 상태)인지 확인
             if (!"1".equals(oracleUser.getUseFlag())) {
-                log.warn("Oracle 사용자가 비활성 상태(useFlag != '1')이므로 마이그레이션을 중단합니다. userId: {}", usrId);
+                log.warn("Oracle 사용자가 비활성 상태이므로 마이그레이션을 중단합니다. userId: {}", usrId);
                 throw new RuntimeException("비활성 상태의 사용자입니다.");
             }
 
-            // 2. 이미 MySQL에 존재하는지 확인
             Optional<UserEntity> existingUserOpt = userRepository.findByUserId(usrId);
             if (existingUserOpt.isPresent()) {
                 log.info("사용자가 이미 MySQL에 존재합니다: {}", usrId);
                 return existingUserOpt.get();
             }
 
-            // 3. Oracle 데이터를 MySQL 형태로 변환
             UserEntity newUser = new UserEntity();
             newUser.setUserId(oracleUser.getUsrId());
             newUser.setUserName(oracleUser.getUsrKorName());
-            newUser.setPasswd(password); // 사용자가 입력한 비밀번호
+            newUser.setPasswd(password);
             newUser.setJobType(oracleUser.getJobType());
             newUser.setDeptCode(oracleUser.getDeptCode());
             newUser.setUseFlag(oracleUser.getUseFlag());
 
-            // jobType 값에 따라 jobLevel 설정
-            if ("0".equals(oracleUser.getJobType())) {
-                newUser.setJobLevel("0"); // jobType이 "0"이면 jobLevel "0"
-            } else if ("1".equals(oracleUser.getJobType())) {
-                newUser.setJobLevel("3"); // jobType이 "1"이면 jobLevel "3"
+            // ✅ Oracle의 String 날짜를 LocalDate로 변환하여 저장
+            LocalDate startDate = DateUtil.parseOracleDate(oracleUser.getStartDate());
+            newUser.setStartDate(startDate);
+
+            if (startDate != null) {
+                log.info("입사일자 설정: {} (원본: {})", startDate, oracleUser.getStartDate());
             } else {
-                // 그 외의 jobType 값에 대한 기본 jobLevel 설정
-                // 비즈니스 로직에 따라 다른 기본값을 주거나, 오류를 발생시킬 수 있습니다.
-                log.warn("알 수 없는 jobType 값: {} for user {}. jobLevel을 '0'으로 설정합니다.", oracleUser.getJobType(), usrId);
+                log.warn("입사일자를 파싱할 수 없습니다: {}", oracleUser.getStartDate());
+            }
+
+            // jobType에 따라 jobLevel 설정
+            if ("0".equals(oracleUser.getJobType())) {
+                newUser.setJobLevel("0");
+            } else if ("1".equals(oracleUser.getJobType())) {
+                newUser.setJobLevel("3");
+            } else {
+                log.warn("알 수 없는 jobType 값: {} for user {}. jobLevel을 '0'으로 설정합니다.",
+                        oracleUser.getJobType(), usrId);
                 newUser.setJobLevel("0");
             }
 
-            //JobLevel에 따라 Role 자동 설정
+            // JobLevel에 따라 Role 자동 설정
             try {
                 int jobLevelInt = Integer.parseInt(newUser.getJobLevel());
                 if (jobLevelInt >= 2) {
@@ -93,13 +98,13 @@ public class OracleService {
                     log.info("JobLevel {}인 사용자 {}에게 USER 권한 부여", jobLevelInt, usrId);
                 }
             } catch (NumberFormatException e) {
-                newUser.setRole(Role.USER); // 기본값
+                newUser.setRole(Role.USER);
                 log.warn("JobLevel 파싱 실패, USER 권한으로 설정: {}", usrId);
             }
 
-            // 4. MySQL에 저장
             UserEntity savedUser = userRepository.save(newUser);
-            log.info("Oracle에서 MySQL로 사용자 정보 이전 완료: {} (Role: {})", usrId, savedUser.getRole());
+            log.info("Oracle에서 MySQL로 사용자 정보 이전 완료: {} (Role: {}, StartDate: {})",
+                    usrId, savedUser.getRole(), savedUser.getStartDate());
 
             return savedUser;
 

@@ -38,13 +38,18 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds")
     List<UserEntity> findWithDeptByUserIdIn(@Param("userIds") Collection<String> userIds);
     @EntityGraph(attributePaths = {"department"})
-    List<UserEntity> findByUseFlag(String useFlag);
+    @Query("SELECT u FROM UserEntity u WHERE u.useFlag = :useFlag AND u.deptCode != '000'")
+    List<UserEntity> findByUseFlag(@Param("useFlag") String useFlag);
 
     // 부서별 조회 (캐시)
     @Cacheable(value = "deptCache", key = "#deptCode")
     List<UserEntity> findByDeptCode(String deptCode);
-    @EntityGraph(attributePaths = {"department"}) // 추가
-    List<UserEntity> findByDeptCodeAndUseFlag(String deptCode, String useFlag);
+    @EntityGraph(attributePaths = {"department"})
+    @Query("SELECT u FROM UserEntity u WHERE u.deptCode = :deptCode AND u.useFlag = :useFlag AND u.deptCode != '000'")
+    List<UserEntity> findByDeptCodeAndUseFlag(
+            @Param("deptCode") String deptCode,
+            @Param("useFlag") String useFlag
+    );
     // 직급으로 조회 (결재자 검색용)f
     @Cacheable(value = "jobLevelUsersCache", key = "#jobLevel")
     List<UserEntity> findByJobLevel(String jobLevel);
@@ -63,7 +68,7 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     /**
      * N+1 방지용: userId 목록으로 한 번에 조회
      */
-    @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds")
+    @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds AND u.deptCode != '000'")
     List<UserEntity> findByUserIdIn(@Param("userIds") Collection<String> userIds);
 
     // 인사팀 직원 조회 (캐시)
@@ -72,22 +77,25 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
 
     // 부서내 정렬 조회 (캐시)
     @Cacheable(value = "deptUsersCache", key = "#deptCode")
-    @Query("SELECT u FROM UserEntity u WHERE u.deptCode = :deptCode ORDER BY u.jobLevel, u.userName")
+    @Query("SELECT u FROM UserEntity u WHERE u.deptCode = :deptCode AND u.deptCode != '000' ORDER BY u.jobLevel, u.userName")
     List<UserEntity> findByDeptCodeOrderByJobLevelAndName(@Param("deptCode") String deptCode);
 
     // 직급 목록으로 조회
-    @Query("SELECT u FROM UserEntity u WHERE u.jobLevel IN :jobLevels ORDER BY u.jobLevel")
+    @Query("SELECT u FROM UserEntity u WHERE u.jobLevel IN :jobLevels AND u.deptCode != '000' ORDER BY u.jobLevel")
     List<UserEntity> findByJobLevelIn(@Param("jobLevels") Collection<String> jobLevels);
 
     // 관리자 권한 체크용 최적화된 쿼리 (예시)
     @Query("SELECT u FROM UserEntity u WHERE " +
+            "u.deptCode != '000' AND " + // ✅ 추가
             "(:adminLevel >= 6 OR " +
             "(:adminLevel >= 2 AND u.jobLevel IN ('0', '1')) OR " +
             "(:adminLevel = 1 AND u.deptCode = :deptCode)) " +
             "ORDER BY u.jobLevel, u.userName")
-    List<UserEntity> findManageableUsersByAdminLevel(@Param("adminLevel") int adminLevel,
-                                                     @Param("deptCode") String deptCode);
-    Optional<UserEntity> findFirstByJobLevelInAndDeptCodeAndRole(List<String> jobLevels, String deptCode, Role role);
+    List<UserEntity> findManageableUsersByAdminLevel(
+            @Param("adminLevel") int adminLevel,
+            @Param("deptCode") String deptCode
+    );
+
     List<UserEntity> findByJobLevelAndRole(String jobLevel, Role role);
     // 비관적 락을 사용한 사용자 조회 (동시성 문제 해결)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -106,24 +114,43 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
 
     Optional<UserEntity> findByPhone(String phone);
 
-    @Query("SELECT DISTINCT u.deptCode FROM UserEntity u WHERE u.deptCode IS NOT NULL AND u.useFlag = '1'")
+    @Query("SELECT DISTINCT u.deptCode FROM UserEntity u WHERE u.deptCode IS NOT NULL AND u.useFlag = '1' AND u.deptCode != '000'")
     List<String> findAllActiveDeptCodes();
 
     //  부서 + 직급 + 활성 여부로 조회
-    List<UserEntity> findByDeptCodeAndJobLevelAndUseFlag(String deptCode, String jobLevel, String useFlag);
+    @Query("SELECT u FROM UserEntity u WHERE u.deptCode = :deptCode AND u.jobLevel = :jobLevel AND u.useFlag = :useFlag AND u.deptCode != '000'")
+    List<UserEntity> findByDeptCodeAndJobLevelAndUseFlag(
+            @Param("deptCode") String deptCode,
+            @Param("jobLevel") String jobLevel,
+            @Param("useFlag") String useFlag
+    );
 
     //  직급 + 활성 여부로 조회
-    List<UserEntity> findByJobLevelAndUseFlag(String jobLevel, String useFlag);
+    @Query("SELECT u FROM UserEntity u WHERE u.jobLevel = :jobLevel AND u.useFlag = :useFlag AND u.deptCode != '000'")
+    List<UserEntity> findByJobLevelAndUseFlag(
+            @Param("jobLevel") String jobLevel,
+            @Param("useFlag") String useFlag
+    );
 
     //  활성 여부 + 직급 목록으로 조회
-    List<UserEntity> findByUseFlagAndJobLevelIn(String useFlag, List<String> jobLevels);
+    @Query("SELECT u FROM UserEntity u WHERE u.useFlag = :useFlag AND u.jobLevel IN :jobLevels AND u.deptCode != '000'")
+    List<UserEntity> findByUseFlagAndJobLevelIn(
+            @Param("useFlag") String useFlag,
+            @Param("jobLevels") List<String> jobLevels
+    );
 
     // deptCode로 시작하는(예: OS, OS01, OS_01 등) 모든 사용자를 활성(useFlag) 기준으로 가져옴
-    List<UserEntity> findByDeptCodeStartingWithAndUseFlag(String baseDeptCode, String useFlag);
+    @Query("SELECT u FROM UserEntity u WHERE u.deptCode LIKE CONCAT(:baseDeptCode, '%') AND u.useFlag = :useFlag AND u.deptCode != '000'")
+    List<UserEntity> findByDeptCodeStartingWithAndUseFlag(
+            @Param("baseDeptCode") String baseDeptCode,
+            @Param("useFlag") String useFlag
+    );
 
     // 💡 [NEW] 페이징된 사용자 목록 조회 (활성/비활성 여부 + 검색어 포함)
-    @Query("SELECT u FROM UserEntity u WHERE (:showAll = TRUE OR u.useFlag = '1') " +
-            "AND (:searchTerm IS NULL OR LOWER(u.userId) LIKE %:searchTerm% OR LOWER(u.userName) LIKE %:searchTerm% OR LOWER(u.deptCode) LIKE %:searchTerm%)")
+    @Query("SELECT u FROM UserEntity u WHERE " +
+            "(:showAll = TRUE OR u.useFlag = '1') AND " +
+            "u.deptCode != '000' AND " + // ✅ 추가
+            "(:searchTerm IS NULL OR LOWER(u.userId) LIKE %:searchTerm% OR LOWER(u.userName) LIKE %:searchTerm% OR LOWER(u.deptCode) LIKE %:searchTerm%)")
     Page<UserEntity> findAllUsersWithPaging(
             @Param("showAll") boolean showAll,
             @Param("searchTerm") String searchTerm,
@@ -131,19 +158,24 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     );
 
     // 💡 [NEW] 전체 사용자 목록 조회 (통계 계산용)
+    @Query("SELECT u FROM UserEntity u WHERE u.deptCode != '000'")
     List<UserEntity> findAll();
 
     // ✅ JPA가 자동으로 COUNT 쿼리를 생성합니다. (전체 사용자 수)
+    @Query("SELECT COUNT(u) FROM UserEntity u WHERE u.deptCode != '000'")
     long count();
 
+
     // ✅ useFlag='1'인 사용자 수
-    long countByUseFlag(String useFlag);
+    @Query("SELECT COUNT(u) FROM UserEntity u WHERE u.useFlag = :useFlag AND u.deptCode != '000'")
+    long countByUseFlag(@Param("useFlag") String useFlag);
     /**
      * 💡 [NEW] 부서별 페이징된 사용자 목록 조회
      * deptBase로 시작하는 부서 코드를 가진 사용자만 조회
      */
     @Query("SELECT u FROM UserEntity u WHERE " +
             "u.deptCode LIKE CONCAT(:deptBase, '%') AND " +
+            "u.deptCode != '000' AND " + // ✅ 추가
             "(:showAll = TRUE OR u.useFlag = '1') AND " +
             "(:searchTerm IS NULL OR " +
             "LOWER(u.userId) LIKE %:searchTerm% OR " +

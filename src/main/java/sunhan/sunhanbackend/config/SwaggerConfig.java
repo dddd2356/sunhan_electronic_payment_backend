@@ -13,7 +13,7 @@ public class SwaggerConfig {
     public OpenAPI customOpenAPI() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("병원 전자 결제 시스템 API")
+                        .title("병원 전자 결재 시스템 API")
                         .version("1.0")
                         .description("API Documentation"));
     }

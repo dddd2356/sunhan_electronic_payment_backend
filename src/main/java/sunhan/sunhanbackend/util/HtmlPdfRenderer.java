@@ -195,6 +195,8 @@ public class HtmlPdfRenderer {
             width: 60%; /* 적절한 비율로 조정 */
             margin: 0;
             padding: 0;
+            display: flex;
+            align-items: center;
     }
     
      .checkbox-item {
@@ -203,24 +205,29 @@ public class HtmlPdfRenderer {
             margin-right: 20px;
             white-space: nowrap;
             vertical-align: middle;
+            line-height: 1.4;
      }
     
      .signature-section {
           float: right;
-            width: 35%; /* 적절한 비율로 조정 */
+            width: 35%;
             text-align: right;
             white-space: nowrap;
             margin: 0;
             padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
      }
                      
      .signature-label {
         font-size: 12px;
             color: #333;
             white-space: nowrap;
-            line-height: 16px;
+            line-height: 1.4;
             margin: 0;
-            display: inline;
+            display: inline-block;
+            vertical-align: middle;
      }
     
      .signature-input {
@@ -231,11 +238,18 @@ public class HtmlPdfRenderer {
         padding: 0 4px;
         font-size: 12px;
         text-align: center;
-        line-height: 1.2;
+        line-height: 1.4;
         margin: 0 5px;
         display: inline-block;
+        vertical-align: middle;
      }
     
+     .signature-wrapper {
+        display: inline-flex;
+        align-items: center;
+        vertical-align: middle;
+     }
+        
      .signature-suffix-container {
         display: inline-block;
         margin: 0;
@@ -310,6 +324,43 @@ public class HtmlPdfRenderer {
         flex-direction: column; /* Stack children vertically */
         align-items: flex-end; /* Align all children (date, signatures) to the right initially */
      }
+     
+                .checkbox-mark {
+                    width: 12px;
+                    height: 12px;
+                    border: 1.5px solid #000;
+                    display: inline-block;
+                    text-align: center;
+                    line-height: 10px;
+                    font-size: 9px;
+                    margin-right: 4px;
+                    vertical-align: text-bottom;
+                    background-color: #fff;
+                    box-sizing: border-box;
+                    position: relative;
+                    top: -1px;
+                }
+               
+                .checkbox-mark.checked {
+                    background-color: #000;
+                    color: #fff;
+                    font-weight: bold;
+                }
+               
+                /* 체크박스 라벨 */
+                .checkbox-label {
+                    display: inline-flex;
+                    align-items: center;
+                    white-space: nowrap;
+                    margin-right: 15px;
+                    line-height: 1.4;
+                }
+               
+                /* 산정근거 가운데 정렬 */
+                .parties-table .calculation-basis {
+                    text-align: center;
+                    vertical-align: middle;
+                }
 
     /* 페이지별 특별 스타일 */
     .page1 { min-height: 260mm; }
@@ -376,7 +427,7 @@ public class HtmlPdfRenderer {
 
         // --- Page 1 Content ---
         html.append("<div class=\"contract-header\">");
-        html.append("<h1>근로계약서【연봉제】</h1>");
+        html.append("<h1>").append(Objects.toString(formData.getContractTitle(), "근로계약서【연봉제】")).append("</h1>");
         html.append("</div>");
         html.append("<div style=\"text-align: left;\">");
         html.append("선한병원(이하 '사용자'라 한다)와(과) ");
@@ -401,7 +452,7 @@ public class HtmlPdfRenderer {
         html.append("<th class=\"field-header\">사업체명</th>");
         html.append("<td class=\"input-cell\">선한병원</td>");
         html.append("<th class=\"field-header\">대표자</th>");
-        html.append("<td class=\"input-cell\">최철훈외 6명</td>");
+        html.append("<td class=\"input-cell\">최민선외 6명</td>");
         html.append("</tr>");
         html.append("<tr>");
         html.append("<th class=\"field-header\">소재지</th>");
@@ -471,43 +522,53 @@ public class HtmlPdfRenderer {
         html.append("12시간 한도로 근로를 연장할 수 있으며, 근로자는 발생할 수 있는 연장, 야간 및 휴일근로를 시행하는 것에 동의한다.</p>");
 
         html.append("<div class=\"consent-container\">");
-        html.append("<div class=\"consent-row\" style=\"display: flex; align-items: center; justify-content: space-between; padding: 5px 15px; min-height: 25px;\">");
+        // [설명] display: table을 사용하여 내부 요소들이 같은 높이를 공유하게 함
+        html.append("<div class=\"consent-row\" style=\"display: table; width: 100%; padding: 5px 0; min-height: 40px;\">");
 
-// 1. 체크박스 섹션
-        html.append("<div class=\"checkbox-section\" style=\"display: flex; margin-top: 8px; align-items: center;\">");
+        // 1. 체크박스 영역 (왼쪽 셀)
+        html.append("<div class=\"checkbox-section\" style=\"display: table-cell; vertical-align: middle; width: 60%; text-align: left; padding-left: 20px;\">");
 
         String page1Agreement = getAgreementSymbol(formData.getAgreements(), "page1");
         if (page1Agreement == null || page1Agreement.isEmpty()) {
-            page1Agreement = uncheckedSymbol;
+            page1Agreement = "☐";
         }
+        boolean isPage1Checked = "☑".equals(page1Agreement);
 
-// 동의 체크박스
-        html.append("<div class=\"checkbox-item\">");
-        String page1CurrentSymbol = "☑".equals(page1Agreement) ? checkedSymbol : uncheckedSymbol;
-        html.append("<span class=\"checkbox-symbol\">" + page1CurrentSymbol + "</span>");
-        html.append("<span>동의</span>");
+        // 동의
+        html.append("<div class=\"checkbox-item\" style=\"display: inline-block; margin-right: 20px;\">");
+        html.append("<label class=\"checkbox-label\" style=\"display: inline-block; vertical-align: middle;\">");
+        html.append("<span class=\"checkbox-mark").append(isPage1Checked ? " checked" : "").append("\">")
+                .append(isPage1Checked ? "V" : "").append("</span>");
+        html.append("<span style=\"vertical-align: middle;\">동의</span>");
+        html.append("</label>");
         html.append("</div>");
 
-// 동의하지 않음 체크박스
-        html.append("<div class=\"checkbox-item\">");
-        String page1OppositeSymbol = "☑".equals(page1Agreement) ? uncheckedSymbol : checkedSymbol;
-        html.append("<span class=\"checkbox-symbol\">" + page1OppositeSymbol + "</span>");
-        html.append("<span>동의하지 않음</span>");
+        // 동의하지 않음
+        html.append("<div class=\"checkbox-item\" style=\"display: inline-block;\">");
+        html.append("<label class=\"checkbox-label\" style=\"display: inline-block; vertical-align: middle;\">");
+        html.append("<span class=\"checkbox-mark").append(!isPage1Checked ? " checked" : "").append("\">")
+                .append(!isPage1Checked ? "V" : "").append("</span>");
+        html.append("<span style=\"vertical-align: middle;\">동의하지 않음</span>");
+        html.append("</label>");
         html.append("</div>");
 
         html.append("</div>"); // checkbox-section 끝
 
-// 2. 서명 섹션
-        html.append("<div class=\"signature-section\" style=\"display: flex; align-items: center;\">");
-        html.append("<span class=\"signature-label\" style=\"margin-right: 10px;\">동의자 :</span>");
-        html.append("<span class=\"signature-wrapper\" style=\"display: flex; align-items: center;\">");
+        // 2. 서명 섹션 (오른쪽 셀)
+        html.append("<div class=\"signature-section\" style=\"display: table-cell; vertical-align: middle; width: 40%; text-align: right; padding-right: 20px; white-space: nowrap;\">");
+        html.append("<span class=\"signature-label\" style=\"margin-right: 5px; vertical-align: middle;\">동의자 :</span>");
+
+        // 이름과 서명을 감싸는 컨테이너
+        html.append("<span style=\"display: inline-block; vertical-align: middle;\">");
 
         if (formData.signatures != null && formData.signatures.containsKey("page1")) {
             List<ContractFormData.SignatureEntry> page1Signatures = formData.signatures.get("page1");
             if (page1Signatures != null && !page1Signatures.isEmpty()) {
                 ContractFormData.SignatureEntry sig = page1Signatures.get(0);
-                html.append("<span class=\"signature-input\" style=\" text-align: center; margin-right: 10px;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
-
+                // 이름
+                html.append("<span style=\"display: inline-block; min-width: 60px; margin-right: 5px; vertical-align: middle; text-align: center;\">")
+                        .append(Objects.toString(formData.employeeName, "")).append("</span>");
+                // 서명 이미지 또는 텍스트
                 if (sig.isSigned && sig.imageUrl != null && !sig.imageUrl.isEmpty()) {
                     html.append("<img src=\"").append(sig.imageUrl).append("\" alt=\"서명\" class=\"signature-image\" style=\"height: 30px; vertical-align: middle;\"/>");
                 } else {
@@ -515,12 +576,14 @@ public class HtmlPdfRenderer {
                 }
             }
         } else {
-            html.append("<span class=\"signature-input\" style=\"border-bottom: 1px solid #333; text-align: center; margin-right: 10px;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
+            // 서명이 없는 경우
+            html.append("<span style=\"display: inline-block; border-bottom: 1px solid #333; min-width: 60px; margin-right: 5px; text-align: center; vertical-align: middle;\">")
+                    .append(Objects.toString(formData.employeeName, "")).append("</span>");
             html.append("<span class=\"signature-text\" style=\"vertical-align: middle;\">(서명/인)</span>");
         }
 
         html.append("</span>");
-        html.append("</div>");
+        html.append("</div>"); // signature-section 끝
         html.append("</div>"); // consent-row 끝
         html.append("</div>"); // consent-container 끝
         html.append("</div>"); // clause
@@ -561,16 +624,16 @@ public class HtmlPdfRenderer {
         html.append("<td style=\"border-top: 3px double #333;\" colspan=\"3\" class=\"section-body\">월급여총액 x 12개월</td>");
         html.append("</tr>");
         html.append("<tr>");
-        html.append("<th rowspan=\"12\" class=\"party-header\">연봉</th>");
+        html.append("<th rowspan=\"11\" class=\"party-header\">연봉</th>");
         html.append("</tr>");
         html.append("<tr>");
-        html.append("<th style=\"font-weight: bolder;\" rowspan=\"8\" class=\"party-header\">표준<br/>연봉총액</th>");
+        html.append("<th style=\"font-weight: bolder;\" rowspan=\"7\" class=\"party-header\">표준<br/>연봉총액</th>");
         html.append("</tr>");
         html.append("<tr>");
         html.append("<th class=\"party-header\">기본급</th>");
         html.append("<td class=\"input-cell\">").append(Objects.toString(formData.basicSalary, "")).append("</td>");
-        html.append("<td colspan=\"1\" rowspan=\"7\" class=\"section-body\">209시간</td>");
-        html.append("<td colspan=\"2\" rowspan=\"7\" class=\"section-body\">소정근로시간 x 통상시급 x 1.0</td>");
+        html.append("<td colspan=\"1\" rowspan=\"6\" class=\"section-body calculation-basis\">209시간</td>");
+        html.append("<td colspan=\"2\" rowspan=\"6\" class=\"section-body calculation-basis\">소정근로시간 x 통상시급 x 1.0</td>");
         html.append("</tr>");
         html.append("<tr>");
         html.append("<th class=\"party-header\">직책수당</th>");
@@ -587,10 +650,6 @@ public class HtmlPdfRenderer {
         html.append("<tr>");
         html.append("<th class=\"party-header\">처우개선비</th>");
         html.append("<td class=\"input-cell\">").append(Objects.toString(formData.treatmentImprovementExpenses, "")).append("</td>");
-        html.append("</tr>");
-        html.append("<tr>");
-        html.append("<th class=\"party-header\">특별수당</th>");
-        html.append("<td class=\"input-cell\">").append(Objects.toString(formData.specialAllowance, "")).append("</td>");
         html.append("</tr>");
         html.append("<tr>");
         html.append("<th class=\"party-header\">조정수당</th>");
@@ -644,16 +703,14 @@ public class HtmlPdfRenderer {
 
         // Page 2 Signature
         html.append("<div class=\"signature-section\" style=\"display: flex; align-items: center; justify-content: flex-end; margin-top: 20px;\">");
-        html.append("<span class=\"signature-label\" style=\"margin-right: 10px;\">확인 :</span>");
+        html.append("<span class=\"signature-label\" style=\"margin-right: 10px; line-height: 1.4; display: inline-block; vertical-align: middle;\">확인 :</span>");
 
         if (formData.signatures != null && formData.signatures.containsKey("page2")) {
             List<ContractFormData.SignatureEntry> page2Signatures = formData.signatures.get("page2");
             if (page2Signatures != null && !page2Signatures.isEmpty()) {
                 ContractFormData.SignatureEntry sig = page2Signatures.get(0);
-                // 이름과 사인이미지를 감싸는 새로운 <span> 추가
-                html.append("<span class=\"signature-container\" style=\"display: flex; align-items: center; min-width:120px; text-align: center;\">");
-                html.append("<span class=\"signature-name\" style=\"margin-right: 5px;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
-
+                html.append("<span class=\"signature-container\" style=\"display: inline-flex; align-items: center; min-width:120px; text-align: center; line-height: 1.4;\">");
+                html.append("<span class=\"signature-name\" style=\"margin-right: 5px; line-height: 1.4; display: inline-block; vertical-align: middle;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
                 if (sig.isSigned && sig.imageUrl != null && !sig.imageUrl.isEmpty()) {
                     html.append("<img src=\"").append(sig.imageUrl).append("\" alt=\"서명\" class=\"signature-image\" style=\"height: 30px;\"/>");
                 } else {
@@ -742,16 +799,14 @@ public class HtmlPdfRenderer {
 
         // Page 3 Signature
         html.append("<div class=\"signature-section\" style=\"display: flex; align-items: center; justify-content: flex-end; margin-top: 20px;\">");
-        html.append("<span class=\"signature-label\" style=\"margin-right: 10px;\">확인 :</span>");
+        html.append("<span class=\"signature-label\" style=\"margin-right: 10px; line-height: 1.4; display: inline-block; vertical-align: middle;\">확인 :</span>");
 
         if (formData.signatures != null && formData.signatures.containsKey("page3")) {
             List<ContractFormData.SignatureEntry> page3Signatures = formData.signatures.get("page3");
             if (page3Signatures != null && !page3Signatures.isEmpty()) {
                 ContractFormData.SignatureEntry sig = page3Signatures.get(0);
-                // 이름과 서명을 감싸는 컨테이너
-                html.append("<span class=\"signature-container\" style=\"display: flex; align-items: center; min-width:120px; text-align: center;\">");
-                html.append("<span class=\"signature-name\" style=\"margin-right: 5px;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
-
+                html.append("<span class=\"signature-container\" style=\"display: inline-flex; align-items: center; min-width:120px; text-align: center; line-height: 1.4;\">");
+                html.append("<span class=\"signature-name\" style=\"margin-right: 5px; line-height: 1.4; display: inline-block; vertical-align: middle;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
                 if (sig.isSigned && sig.imageUrl != null && !sig.imageUrl.isEmpty()) {
                     html.append("<img src=\"").append(sig.imageUrl).append("\" alt=\"서명\" class=\"signature-image\" style=\"height: 30px;\"/>");
                 } else {
@@ -826,24 +881,30 @@ public class HtmlPdfRenderer {
 // Page 4 동의 상태 가져오기
         String page4Agreement = getAgreementSymbol(formData.getAgreements(), "page4");
         if (page4Agreement == null || page4Agreement.isEmpty()) {
-            page4Agreement = uncheckedSymbol;
+            page4Agreement = "☐";
         }
+
 
 // 동의 체크박스
         html.append("<div class=\"checkbox-item\">");
-        String page4CurrentSymbol = "☑".equals(page4Agreement) ? checkedSymbol : uncheckedSymbol;
-        html.append("<span class=\"checkbox-symbol\">" + page4CurrentSymbol + "</span>");
+        html.append("<label class=\"checkbox-label\">");
+        boolean isPage4Checked = "☑".equals(page4Agreement);
+        html.append("<span class=\"checkbox-mark").append(isPage4Checked ? " checked" : "").append("\">")
+                .append(isPage4Checked ? "V" : "").append("</span>");
         html.append("<span>동의</span>");
+        html.append("</label>");
         html.append("</div>");
 
 // 동의하지 않음 체크박스
         html.append("<div class=\"checkbox-item\">");
-        String page4OppositeSymbol = "☑".equals(page4Agreement) ? uncheckedSymbol : checkedSymbol;
-        html.append("<span class=\"checkbox-symbol\">" + page4OppositeSymbol + "</span>");
+        html.append("<label class=\"checkbox-label\">");
+        html.append("<span class=\"checkbox-mark").append(!isPage4Checked ? " checked" : "").append("\">")
+                .append(!isPage4Checked ? "V" : "").append("</span>");
         html.append("<span>동의하지 않음</span>");
+        html.append("</label>");
         html.append("</div>");
 
-        html.append("</div>"); // checkbox-section 끝
+        html.append("</div>");
 
 // 서명 섹션
         html.append("<div class=\"signature-section\">");
@@ -970,7 +1031,7 @@ public class HtmlPdfRenderer {
 
         // 2. 회사 서명 (오른쪽 정렬된 독립 div)
         html.append("    <div style=\"text-align: right; margin-bottom: 15px; line-height: 1.4;\">");
-        html.append("        <span style=\"font-weight: bold;\">회사 : 선한병원 대표원장 최철훈외 6명</span>");
+        html.append("        <span style=\"font-weight: bold;\">회사 : 선한병원 대표원장 최민선외 6명</span>");
 // 이름과 서명 이미지를 감싸는 새로운 Flexbox 컨테이너
         html.append("        <span style=\"display: inline-flex; align-items: center; justify-content: flex-end;\">");
         // 이미지 파일을 Base64로 변환하여 HTML에 직접 삽입

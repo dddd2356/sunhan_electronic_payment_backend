@@ -32,4 +32,7 @@ public class OracleEntity {
 
     @Column(name="USEFLAG")
     private String useFlag;
+
+    @Column(name="STARTDT")
+    private String startDate;
 }

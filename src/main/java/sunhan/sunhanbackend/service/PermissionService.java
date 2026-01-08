@@ -66,6 +66,7 @@ public class PermissionService {
 
     /**
      * Spring Cache를 이용한 장기 캐싱 (DB에서 실제 조회)
+     * ✅ 시스템 관리자(deptCode = "000")는 모든 권한 자동 부여
      */
     @Cacheable(value = "userAllPermissionsCache", key = "#userId")
     public Set<PermissionType> getAllUserPermissionsFromDB(String userId) {
@@ -73,14 +74,23 @@ public class PermissionService {
         Set<PermissionType> permissions = new HashSet<>();
 
         Optional<UserEntity> userOpt = userRepository.findByUserId(userId);
-        if (!userOpt.isPresent() || userOpt.get().getRole() != Role.ADMIN) {
+        if (!userOpt.isPresent()) {
             return permissions;
         }
 
         UserEntity user = userOpt.get();
 
+        // ✅ 시스템 관리자는 모든 권한 자동 부여
+        if ("000".equals(user.getDeptCode())) {
+            return EnumSet.allOf(PermissionType.class); // 모든 권한 반환
+        }
+
+        // ✅ 일반 관리자 권한 확인
+        if (user.getRole() != Role.ADMIN) {
+            return permissions;
+        }
+
         if (user.getDeptCode() != null) {
-            // 🔧 새로운 메서드 사용 (Set 반환이므로 중복 제거됨)
             Set<UserPermissionEntity> userPermissions = userPermissionRepository.getAllUserPermissions(userId);
             Set<DeptPermissionEntity> deptPermissions = deptPermissionRepository.getAllDeptPermissions(user.getDeptCode());
 
@@ -242,16 +252,20 @@ public class PermissionService {
     @Transactional
     @CacheEvict(value = "userAllPermissionsCache", allEntries = true)
     public void grantUserPermission(String adminUserId, String targetUserId, PermissionType permissionType) {
-        // 1️⃣ 권한 관리자 자격 검증
         validateAdminPermission(adminUserId);
+
         UserEntity admin = userRepository.findByUserId(adminUserId)
                 .orElseThrow(() -> new RuntimeException("관리자를 찾을 수 없습니다: " + adminUserId));
         UserEntity targetUser = userRepository.findByUserId(targetUserId)
                 .orElseThrow(() -> new RuntimeException("대상 사용자를 찾을 수 없습니다: " + targetUserId));
 
+        // ✅ 시스템 관리자에게는 권한 부여 불가
+        if ("000".equals(targetUser.getDeptCode())) {
+            throw new RuntimeException("시스템 관리자는 이미 모든 권한을 보유하고 있습니다.");
+        }
+
         int adminLevel = Integer.parseInt(admin.getJobLevel());
 
-        // 2️⃣ jobLevel 1 부서장: 같은 부서만 권한 부여 가능
         if (adminLevel == 1) {
             String adminDeptBase = admin.getDeptCode().replaceAll("\\d+$", "");
             String targetDeptBase = targetUser.getDeptCode().replaceAll("\\d+$", "");
@@ -261,13 +275,11 @@ public class PermissionService {
             }
         }
 
-        // 3️⃣ 중복 체크
         if (userPermissionRepository.existsByUserIdAndPermissionType(targetUserId, permissionType)) {
             log.info("사용자 {}에게 이미 {} 권한이 존재합니다", targetUserId, permissionType);
             return;
         }
 
-        // 4️⃣ 권한 부여
         UserPermissionEntity permission = new UserPermissionEntity(targetUserId, permissionType);
         userPermissionRepository.save(permission);
 
@@ -282,7 +294,6 @@ public class PermissionService {
     @Transactional
     @CacheEvict(value = "userAllPermissionsCache", allEntries = true)
     public void revokeUserPermission(String adminUserId, String targetUserId, PermissionType permissionType) {
-        // 1️⃣ 권한 관리자 자격 검증
         validateAdminPermission(adminUserId);
 
         UserEntity admin = userRepository.findByUserId(adminUserId)
@@ -290,9 +301,13 @@ public class PermissionService {
         UserEntity targetUser = userRepository.findByUserId(targetUserId)
                 .orElseThrow(() -> new RuntimeException("대상 사용자를 찾을 수 없습니다: " + targetUserId));
 
+        // ✅ 시스템 관리자의 권한은 제거 불가
+        if ("000".equals(targetUser.getDeptCode())) {
+            throw new RuntimeException("시스템 관리자의 권한은 제거할 수 없습니다.");
+        }
+
         int adminLevel = Integer.parseInt(admin.getJobLevel());
 
-        // 2️⃣ jobLevel 1 부서장: 같은 부서만 권한 제거 가능
         if (adminLevel == 1) {
             String adminDeptBase = admin.getDeptCode().replaceAll("\\d+$", "");
             String targetDeptBase = targetUser.getDeptCode().replaceAll("\\d+$", "");
@@ -302,7 +317,6 @@ public class PermissionService {
             }
         }
 
-        // 3️⃣ 권한 제거
         userPermissionRepository.deleteByUserIdAndPermissionType(targetUserId, permissionType);
 
         invalidatePermissionCache();

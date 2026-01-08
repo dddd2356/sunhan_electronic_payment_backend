@@ -62,6 +62,15 @@ public class SecurityConfig {
                         // "/api/**"와 같이 광범위한 패턴 대신 필요한 경로만 permitAll 처리합니다.
                         .requestMatchers(
                                 "/",
+                                "/index.html",     // index.html 직접 접근 허용
+                                "/favicon.ico",        // 기본 파비콘 허용
+                                "/*.ico",              // 모든 .ico 파일 허용 (newExecution.ico 대응)
+                                "/static/**",      // 빌드된 JS, CSS 파일들이 들어가는 경로
+                                "/*.js",           // 루트의 js 파일들
+                                "/*.json",         // manifest.json 등
+                                "/*.png",          // 파비콘이나 로고
+                                "/manifest.json",
+                                "/logo192.png",
                                 "/uploads/**",
                                 "/api/auth/**",      // 인증 (로그인/가입)
                                 "/api/v1/auth/**",
@@ -100,8 +109,8 @@ public class SecurityConfig {
     protected CorsConfigurationSource corsConfigurationSource(){
         CorsConfiguration corsConfiguration = new CorsConfiguration();
         corsConfiguration.addAllowedOrigin("http://localhost:3000");  // 허용된 도메인 설정
-        corsConfiguration.addAllowedOrigin("http://localhost:8080");  // 추가 허용 도메인
-        corsConfiguration.addAllowedOrigin("http://100.100.100.224:8080");
+        corsConfiguration.addAllowedOrigin("http://localhost:9090");  // 추가 허용 도메인
+        corsConfiguration.addAllowedOrigin("http://100.100.100.224:9090");
         corsConfiguration.addAllowedOrigin("http://100.100.100.224:3000");
         corsConfiguration.addAllowedMethod("*");  // 모든 HTTP 메서드 허용
         corsConfiguration.addAllowedHeader("*");  // 모든 HTTP 헤더 허용

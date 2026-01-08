@@ -24,6 +24,7 @@ import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import org.springframework.cache.annotation.Cacheable;
+import sunhan.sunhanbackend.util.DateUtil;
 
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -32,6 +33,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -197,14 +199,40 @@ public class UserService {
         if (userOpt.isPresent()) {
             UserEntity user = userOpt.get();
 
-            // 2-2. Oracle DB에서 최신 useFlag를 동기화합니다.
             try {
                 OracleEntity oracleUser = oracleService.getOracleUserInfo(userId);
 
+                boolean needsUpdate = false;
+
                 if (!Objects.equals(user.getUseFlag(), oracleUser.getUseFlag())) {
-                    log.info("Oracle의 useFlag({})가 MySQL({})과 다릅니다. 사용자 {}의 정보를 동기화합니다.",
-                            oracleUser.getUseFlag(), user.getUseFlag(), userId);
                     user.setUseFlag(oracleUser.getUseFlag());
+                    needsUpdate = true;
+                }
+
+                if (!Objects.equals(user.getUserName(), oracleUser.getUsrKorName())) {
+                    user.setUserName(oracleUser.getUsrKorName());
+                    needsUpdate = true;
+                }
+
+                if (!Objects.equals(user.getDeptCode(), oracleUser.getDeptCode())) {
+                    user.setDeptCode(oracleUser.getDeptCode());
+                    needsUpdate = true;
+                }
+
+                if (!Objects.equals(user.getJobType(), oracleUser.getJobType())) {
+                    user.setJobType(oracleUser.getJobType());
+                    needsUpdate = true;
+                }
+
+                // ✅ Oracle String 날짜를 LocalDate로 변환하여 비교
+                LocalDate oracleStartDate = DateUtil.parseOracleDate(oracleUser.getStartDate());
+                if (!Objects.equals(user.getStartDate(), oracleStartDate)) {
+                    user.setStartDate(oracleStartDate);
+                    needsUpdate = true;
+                }
+
+                if (needsUpdate) {
+                    log.info("Oracle의 정보가 MySQL과 다릅니다. 사용자 {}의 정보를 동기화합니다.", userId);
                     userRepository.save(user);
                 }
 
@@ -895,9 +923,11 @@ public class UserService {
         );
     }
 
+    @Transactional(readOnly = true)
     public List<UserEntity> getAllUsersForStats() {
-        // Warning: 이 메서드는 여전히 대용량 부하의 원인이 될 수 있으므로 캐시 적용 고려
-        return userRepository.findAll();
+        return userRepository.findAll().stream()
+                .filter(u -> !"000".equals(u.getDeptCode()))
+                .collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)

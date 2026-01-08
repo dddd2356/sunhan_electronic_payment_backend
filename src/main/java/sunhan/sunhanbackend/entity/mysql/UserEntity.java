@@ -9,6 +9,7 @@ import sunhan.sunhanbackend.enums.Role;
 import org.hibernate.annotations.Cache; // 하이버네이트 어노테이션 임포트
 
 import java.io.Serializable;
+import java.time.LocalDate;
 import java.util.Objects;
 
 @Getter
@@ -33,6 +34,8 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     @Column(name = "name")
     private String userName; // 사용자 이름
     private String passwd;  // 비밀번호
+    @Column(name = "start_date")
+    private LocalDate startDate; // 입사일자
     @Column(name="jobtype")
     private String jobType;
     @Column(name = "joblevel")

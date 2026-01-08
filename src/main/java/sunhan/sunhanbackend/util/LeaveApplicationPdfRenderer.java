@@ -254,21 +254,67 @@ public class LeaveApplicationPdfRenderer {
         .leave-type-row { padding: 2px 0; }
         
         .checkbox-label {
-            font-size: 10px;
+            font-size: 9px;
             display: inline-block;
-            padding-right: 25px;
+            padding-right: 15px;
             min-width: 33.33%;
             box-sizing: border-box;
+            white-space: nowrap;
+            line-height: 1.4;
         }
         .checkbox-mark {
             width: 10px; height: 10px; border: 1px solid #000;
-            display: inline-block; text-align: center; line-height: 10px;
-            font-size: 10px; margin-right: 4px; vertical-align: middle;
+            display: inline-block; text-align: center; line-height: 9px;
+            font-size: 8px; margin-right: 3px; vertical-align: text-bottom;
+            background-color: #fff; box-sizing: border-box; position: relative;
+            top: -1px;
         }
-        .checkbox-mark.checked { background-color: #000; color: #fff; }
-        
+        .checkbox-mark.checked {
+            background-color: #000; color: #fff;
+            font-weight: bold; line-height: 9px;
+        }
+            .radio-mark {
+                         width: 9px;
+                         height: 9px;
+                         border: 1px solid #000;
+                         border-radius: 50%;
+                         display: inline-block;
+                         margin-right: 2px;
+                         vertical-align: text-bottom;
+                         background-color: #fff;
+                         position: relative;
+                         top: -1px;
+                         box-sizing: border-box;
+            }
+            .radio-mark.checked::after {
+                content: '';
+                position: absolute;
+                width: 5px;
+                height: 5px;
+                border-radius: 50%;
+                background-color: #000;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                margin: 0;
+            }
         .period-cell { border: 1px solid #000; padding: 10px; text-align: left; font-size: 10px; }
-        .half-day-option { margin-left: 10px; }
+        .half-day-option {
+            margin-left: 15px;
+            font-size: 9px;
+            display: inline-block;
+            white-space: nowrap;
+            line-height: 1.4;
+        }
+            .radio-group {
+                         display: inline-block;
+                         margin-right: 10px;
+                         white-space: nowrap;
+                         line-height: 1.4;
+            }
+                .radio-group:last-child {
+                             margin-right: 0;
+                }
         .total-days-cell { border-left: 1px solid #000; border-bottom: 1px solid #000; padding: 8px; text-align: center; font-weight: bold; font-size: 10px; }
         .substitute-cell { border-left: 1px solid #000; border-bottom: 1px solid #000; padding: 10px; font-size: 10px; }
         
@@ -964,26 +1010,28 @@ public class LeaveApplicationPdfRenderer {
 
         String halfDay = period.path("halfDayOption").asText("all_day");
         String halfDayIndicator = "";
+
         switch (halfDay) {
             case "morning":
                 halfDayIndicator = " <span class='half-day-option'>" +
-                        "<span class='radio-mark'></span>종일 " +
-                        "<span class='radio-mark checked'>●</span>오전 " +
-                        "<span class='radio-mark'></span>오후</span>";
+                        "<span class='radio-group'><span class='radio-mark'></span>종일</span>" +
+                        "<span class='radio-group'><span class='radio-mark checked'></span>오전</span>" +
+                        "<span class='radio-group'><span class='radio-mark'></span>오후</span></span>";
                 break;
             case "afternoon":
                 halfDayIndicator = " <span class='half-day-option'>" +
-                        "<span class='radio-mark'></span>종일 " +
-                        "<span class='radio-mark'></span>오전 " +
-                        "<span class='radio-mark checked'>●</span>오후</span>";
+                        "<span class='radio-group'><span class='radio-mark'></span>종일</span>" +
+                        "<span class='radio-group'><span class='radio-mark'></span>오전</span>" +
+                        "<span class='radio-group'><span class='radio-mark checked'></span>오후</span></span>";
                 break;
             default:
                 halfDayIndicator = " <span class='half-day-option'>" +
-                        "<span class='radio-mark checked'>●</span>종일 " +
-                        "<span class='radio-mark'></span>오전 " +
-                        "<span class='radio-mark'></span>오후</span>";
+                        "<span class='radio-group'><span class='radio-mark checked'></span>종일</span>" +
+                        "<span class='radio-group'><span class='radio-mark'></span>오전</span>" +
+                        "<span class='radio-group'><span class='radio-mark'></span>오후</span></span>";
                 break;
         }
+
         return "<div>" + startDate + " ~ " + endDate + halfDayIndicator + "</div>";
     }
 

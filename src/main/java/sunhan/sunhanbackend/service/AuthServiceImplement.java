@@ -76,7 +76,7 @@ public class AuthServiceImplement implements AuthService {
 
         Cookie sessionCookie = new Cookie("Idea-b5e63b4f", null);
         sessionCookie.setMaxAge(0);
-        sessionCookie.setDomain("localhost:8080");
+        sessionCookie.setDomain("localhost:9090");
         sessionCookie.setPath("/");
         sessionCookie.setSecure(false);
         sessionCookie.setHttpOnly(true);

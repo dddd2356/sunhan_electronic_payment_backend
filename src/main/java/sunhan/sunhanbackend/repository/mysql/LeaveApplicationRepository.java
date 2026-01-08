@@ -11,6 +11,7 @@ import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
 import sunhan.sunhanbackend.enums.LeaveType;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -70,5 +71,23 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
             @Param("userId") String userId,
             @Param("statuses") Set<LeaveApplicationStatus> statuses,
             Pageable pageable
+    );
+
+    /**
+     * ✅ 특정 기간 및 사용자의 승인된 휴가원 조회
+     */
+    @Query("SELECT la FROM LeaveApplication la WHERE " +
+            "la.applicant.userId IN :userIds AND " +
+            "la.status = :status AND " +
+            "la.leaveType = :leaveType AND " +
+            "((la.startDate BETWEEN :startDate AND :endDate) OR " +
+            "(la.endDate BETWEEN :startDate AND :endDate) OR " +
+            "(la.startDate < :startDate AND la.endDate > :endDate))")
+    List<LeaveApplication> findByUserIdsAndPeriod(
+            @Param("userIds") List<String> userIds,
+            @Param("status") LeaveApplicationStatus status,
+            @Param("leaveType") LeaveType leaveType,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
     );
 }
