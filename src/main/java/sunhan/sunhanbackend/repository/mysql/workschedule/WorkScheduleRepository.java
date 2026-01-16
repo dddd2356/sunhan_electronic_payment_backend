@@ -124,4 +124,7 @@ public interface WorkScheduleRepository extends JpaRepository<WorkSchedule, Long
             @Param("userId") String userId,
             @Param("status") WorkSchedule.ScheduleStatus status
     );
+
+    List<WorkSchedule> findByScheduleYearMonthAndApprovalStatus(String scheduleYearMonth,
+                                                                WorkSchedule.ScheduleStatus approvalStatus);
 }

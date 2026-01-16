@@ -76,8 +76,20 @@ public class LeaveApplication {
     @Column(name = "end_date")
     private LocalDate endDate; // 휴가 종료일
 
-    @Column(name = "total_days")
-    private Double totalDays;  // 총 휴가 일수
+    @Column(name = "annual_used_carryover")
+    private Double annualUsedCarryover = 0.0;  // 이 신청서에서 사용한 연차 이월
+
+    @Column(name = "annual_used_regular")
+    private Double annualUsedRegular = 0.0;    // 이 신청서에서 사용한 연차 정상
+
+    // ✅ OneToMany 관계 추가 (일별 상세)
+    @OneToMany(
+            mappedBy = "leaveApplication",
+            cascade = CascadeType.ALL,     // ✅ 추가
+            orphanRemoval = true,          // ✅ 추가
+            fetch = FetchType.LAZY
+    )
+    private List<LeaveApplicationDay> days = new ArrayList<>();
 
     @Column(name = "application_date", nullable = false)
     private LocalDate applicationDate; // 신청일
@@ -145,9 +157,6 @@ public class LeaveApplication {
     @Column(name = "is_ceo_director_approved")
     private Boolean isCeoDirectorApproved = false; // 대표원장 승인 여부
 
-
-    // ------------------------------------
-
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -182,5 +191,35 @@ public class LeaveApplication {
     // 양방향 연관관계 편의 메서드
     public void addAttachment(LeaveApplicationAttachment attachment) {
         this.attachments.add(attachment);
+    }
+
+    public Double getTotalDays() {
+        if (this.days == null || this.days.isEmpty()) {
+            return 0.0;
+        }
+        return this.days.stream()
+                .mapToDouble(LeaveApplicationDay::getDays)
+                .sum();
+    }
+
+    public void setDays(List<LeaveApplicationDay> days) {
+        // 1. 기존 자식의 부모 참조를 null로 설정 (orphanRemoval 트리거)
+        if (this.days != null && !this.days.isEmpty()) {
+            this.days.forEach(day -> day.setLeaveApplication(null));
+            this.days.clear();
+        }
+
+        // 2. 리스트 초기화
+        if (this.days == null) {
+            this.days = new ArrayList<>();
+        }
+
+        // 3. 새 자식 추가 및 양방향 관계 설정
+        if (days != null) {
+            for (LeaveApplicationDay day : days) {
+                day.setLeaveApplication(this);
+                this.days.add(day);
+            }
+        }
     }
 }

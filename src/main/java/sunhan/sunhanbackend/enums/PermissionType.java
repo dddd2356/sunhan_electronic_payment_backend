@@ -10,5 +10,35 @@ public enum PermissionType {
     // ✅ 전결 권한 추가
     FINAL_APPROVAL_LEAVE_APPLICATION,
     FINAL_APPROVAL_WORK_SCHEDULE,
-    FINAL_APPROVAL_ALL
+    FINAL_APPROVAL_ALL,
+
+    // ✅ 동의서 관련 권한 추가
+    /**
+     * 동의서 생성 권한
+     * - 조직도에서 대상자를 선택하여 동의서 발송 가능
+     * - 본인이 발송한 완료 동의서 조회 가능
+     */
+    CONSENT_CREATE("동의서 생성"),
+
+    /**
+     * 동의서 관리 권한
+     * - 전체 동의서 목록 조회/검색/필터링
+     * - 모든 완료 동의서 열람 가능
+     * - PDF 다운로드 가능
+     */
+    CONSENT_MANAGE("동의서 관리");
+
+    private final String displayName;
+
+    PermissionType() {
+        this.displayName = this.name();
+    }
+
+    PermissionType(String displayName) {
+        this.displayName = displayName;
+    }
+
+    public String getDisplayName() {
+        return displayName;
+    }
 }

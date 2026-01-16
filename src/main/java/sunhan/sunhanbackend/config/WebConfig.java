@@ -20,6 +20,9 @@ public class WebConfig implements WebMvcConfigurer {
     @Value("${file.upload.sign-dir}")
     private String signDir;
 
+    @Value("${file.upload.consent-dir}")
+    private String consentDir;
+
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         // 로컬 개발용 상대경로 업로드 폴더
@@ -38,6 +41,9 @@ public class WebConfig implements WebMvcConfigurer {
         // work-schedule
         registry.addResourceHandler("/uploads/work_schedule/**")
                 .addResourceLocations(workScheduleDir);  // 절대 경로 (윈도우 스타일)
+
+        registry.addResourceHandler("/uploads/consent_agreement/**")
+                .addResourceLocations(pathToFileUri(consentDir));
     }
 
     private String pathToFileUri(String path) {

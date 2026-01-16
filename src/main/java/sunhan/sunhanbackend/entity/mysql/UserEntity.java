@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.Hibernate;
 import org.hibernate.annotations.CacheConcurrencyStrategy;
+import sunhan.sunhanbackend.enums.LeaveType;
 import sunhan.sunhanbackend.enums.Role;
 import org.hibernate.annotations.Cache; // 하이버네이트 어노테이션 임포트
 
@@ -69,12 +70,6 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     @Enumerated(EnumType.STRING)
     @Column(name = "role")
     private Role role = Role.USER; // 기본값 USER
-    // UserEntity.java에 추가할 필드들
-    @Column(name = "total_vacation_days")
-    private Double totalVacationDays = 15.0;
-
-    @Column(name = "used_vacation_days")
-    private Double usedVacationDays = 0.0;
 
     // 개인정보 수집/이용 동의 필드 추가
     @Column(name = "privacy_consent")
@@ -116,54 +111,6 @@ public class UserEntity implements Serializable { // 여기에 Serializable 추�
     @Override
     public int hashCode() {
         return Objects.hash(userId);
-    }
-
-    /**
-     * 남은 연차 일수 계산
-     * @return 총 휴가일수 - 사용한 휴가일수
-     */
-    public Double getRemainingAnnualLeave() {
-        if (totalVacationDays == null) {
-            return 15.0;
-        }
-        if (usedVacationDays == null) {
-            return totalVacationDays;
-        }
-        return Math.max(0.0, totalVacationDays - usedVacationDays);
-    }
-
-    /**
-     * 휴가 사용
-     * @param days 사용할 일수
-     * @throws IllegalStateException 잔여 일수 부족 시
-     */
-    public void useVacationDays(double days) {
-        if (days <= 0) {
-            throw new IllegalArgumentException("사용 일수는 0보다 커야 합니다.");
-        }
-        if (getRemainingAnnualLeave() < days) {
-            throw new IllegalStateException(
-                    String.format("잔여 연차가 부족합니다. (필요: %.1f일, 잔여: %.1f일)", days, getRemainingAnnualLeave())
-            );
-        }
-        if (usedVacationDays == null) {
-            usedVacationDays = 0.0;
-        }
-        usedVacationDays += days;
-    }
-
-    /**
-     * 휴가 복구 (취소 시)
-     * @param days 복구할 일수
-     */
-    public void restoreVacationDays(double days) {
-        if (days <= 0) {
-            throw new IllegalArgumentException("복구 일수는 0보다 커야 합니다.");
-        }
-        if (usedVacationDays == null) {
-            usedVacationDays = 0.0;
-        }
-        usedVacationDays = Math.max(0.0, usedVacationDays - days);
     }
 
     public String getDepartmentName() {

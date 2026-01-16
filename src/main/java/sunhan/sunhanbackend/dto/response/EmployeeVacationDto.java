@@ -15,8 +15,21 @@ public class EmployeeVacationDto {
     private String jobLevel;
     private String jobType;
     private LocalDate startDate;
-    private Integer totalDays;
-    private Integer usedDays;
-    private Integer remainingDays;
+    // ✅ 수정: Integer → Double
+    private Double annualCarryover;
+    private Double annualRegular;
+    private Double annualTotal;
+    private Double annualUsed;
+    private Double annualRemaining;
+    private Double annualUsageRate;
+
+    // 하위 호환
+    @Deprecated
+    private Double totalDays;
+    @Deprecated
+    private Double usedDays;
+    @Deprecated
+    private Double remainingDays;
+    @Deprecated
     private Double usageRate;
 }

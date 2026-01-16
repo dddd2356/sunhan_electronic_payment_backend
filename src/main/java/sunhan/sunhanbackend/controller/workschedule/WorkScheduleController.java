@@ -31,6 +31,7 @@ import sunhan.sunhanbackend.service.workschedule.WorkScheduleService;
 import sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus;
 
 import java.io.IOException;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -818,18 +819,39 @@ public class WorkScheduleController {
 
             // ✅ PDF 재생성 로직 (기존 유지, but 로그 강화)
             boolean needsRegeneration = false;
+            Path pdfPath = null;
 
             if (schedule.getPdfUrl() == null || schedule.getPdfUrl().isEmpty()) {
                 needsRegeneration = true;
             } else {
-                String cleanedPath = schedule.getPdfUrl().replaceFirst("^/+uploads/?", "").trim();
-                Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
-                Path pdfPath = uploadsRoot.resolve(cleanedPath).normalize();
-
-                if (!Files.exists(pdfPath) || Files.size(pdfPath) == 0) {
+                // ✅ pdfUrl 파싱 및 디코딩
+                String pdfUrl = schedule.getPdfUrl();
+                String relativePath = pdfUrl.replaceFirst("^/+uploads/?", "").trim();  // work_schedule/%EC%99%B8%EB%9E%98_202503/%EC%99%B8%EB%9E%98_202503_20260112_220120.pdf
+                String[] parts = relativePath.split("/");
+                if (parts.length != 3) {
+                    log.error("Invalid pdfUrl format: {}", pdfUrl);
                     needsRegeneration = true;
-                    schedule.setPdfUrl(null);
-                    scheduleRepository.save(schedule);
+                } else {
+                    String subDir = parts[0];  // work_schedule
+                    String deptDirEncoded = parts[1];  // %EC%99%B8%EB%9E%98_202503
+                    String filenameEncoded = parts[2];  // %EC%99%B8%EB%9E%98_202503_20260112_220120.pdf
+
+                    // Decode
+                    String deptDir = URLDecoder.decode(deptDirEncoded, StandardCharsets.UTF_8.name());
+                    String filename = URLDecoder.decode(filenameEncoded, StandardCharsets.UTF_8.name());
+
+                    // 실제 파일 경로 구성
+                    Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
+                    pdfPath = uploadsRoot.resolve(subDir).resolve(deptDir).resolve(filename).normalize();
+
+                    log.info("PDF 다운로드 시도: pdfUrl={}, 실제 경로={}", pdfUrl, pdfPath);
+
+                    if (!Files.exists(pdfPath) || Files.size(pdfPath) == 0) {
+                        log.warn("PDF 파일 없음 또는 빈 파일: {}", pdfPath);
+                        needsRegeneration = true;
+                        schedule.setPdfUrl(null);
+                        scheduleRepository.save(schedule);
+                    }
                 }
             }
 
@@ -840,12 +862,7 @@ public class WorkScheduleController {
                         .body(Map.of("status", "generating", "message", "PDF 생성 중입니다. 잠시 후 다시 시도해주세요."));
             }
 
-            // ✅ PDF 파일 로드 (기존 유지)
-            String pdfUrl = schedule.getPdfUrl();
-            String cleanedPath = pdfUrl.replaceFirst("^/+uploads/?", "").trim();
-            Path uploadsRoot = Paths.get("C:", "sunhan_electronic_payment").toAbsolutePath().normalize();
-            Path pdfPath = uploadsRoot.resolve(cleanedPath).normalize();
-
+            // ✅ PDF 파일 로드
             byte[] pdfBytes = Files.readAllBytes(pdfPath);
 
             String safeFilename = String.format("work_schedule_%s_%s.pdf",
@@ -1431,6 +1448,40 @@ public class WorkScheduleController {
             log.error("내 작성 문서 조회 실패", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "조회 중 오류가 발생했습니다."));
+        }
+    }
+
+    /**
+     * 내 개인 근무현황 조회 (MainPage용 캘린더)
+     * GET /api/v1/work-schedules/my-schedule/{yearMonth}
+     */
+    @GetMapping("/my-schedule/{yearMonth}")
+    public ResponseEntity<?> getMySchedule(
+            @PathVariable String yearMonth,
+            Authentication auth
+    ) {
+        if (auth != null) {
+            log.info("Authenticated principal: name={}, authenticated={}, authorities={}",
+                    auth.getName(), auth.isAuthenticated(), auth.getAuthorities());
+        } else {
+            log.warn("Authentication is null for request to my-schedule/{}", yearMonth);
+        }
+        try {
+            String userId = auth.getName();
+
+            // administrator 특별 처리
+            if ("administrator".equalsIgnoreCase(userId)) {
+                return ResponseEntity.ok(Collections.emptyMap());
+            }
+
+            Map<String, Object> mySchedule = scheduleService.getMyPersonalSchedule(userId, yearMonth);
+            return ResponseEntity.ok(mySchedule);
+
+        } catch (Exception e) {
+            log.error("개인 근무현황 조회 실패: userId={}, yearMonth={}",
+                    auth.getName(), yearMonth, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "근무현황 조회 중 오류가 발생했습니다."));
         }
     }
 }

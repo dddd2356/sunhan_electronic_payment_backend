@@ -90,4 +90,92 @@ public interface LeaveApplicationRepository extends JpaRepository<LeaveApplicati
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate
     );
+
+    // 연차 조회
+    @Query("SELECT la FROM LeaveApplication la " +
+            "LEFT JOIN FETCH la.days " +
+            "WHERE la.applicantId = :applicantId " +
+            "AND la.leaveType = :leaveType " +
+            "AND YEAR(la.startDate) = :year " +
+            "AND la.status = 'APPROVED'")
+    List<LeaveApplication> findByApplicantIdAndLeaveTypeAndYear(
+            @Param("applicantId") String applicantId,
+            @Param("leaveType") LeaveType leaveType,
+            @Param("year") int year
+    );
+
+    // 경조/특별 조회
+    @Query("SELECT la FROM LeaveApplication la " +
+            "LEFT JOIN FETCH la.days " +
+            "WHERE la.applicantId = :applicantId " +
+            "AND la.leaveType IN :leaveTypes " +
+            "AND YEAR(la.startDate) = :year " +
+            "AND la.status = 'APPROVED'")
+    List<LeaveApplication> findByApplicantIdAndLeaveTypeInAndYear(
+            @Param("applicantId") String applicantId,
+            @Param("leaveTypes") List<LeaveType> leaveTypes,
+            @Param("year") int year
+    );
+
+    /**
+     * ✅ 승인된 연차만 조회 (재계산용)
+     */
+    @Query("SELECT la FROM LeaveApplication la " +
+            "WHERE la.status = 'APPROVED' " +
+            "AND la.leaveType = 'ANNUAL_LEAVE'")
+    List<LeaveApplication> findAllApprovedAnnualLeaves();
+
+    // 날짜 범위로 검색 (관리자용 - 모든 휴가원)
+    @Query("SELECT la FROM LeaveApplication la " +
+            "WHERE la.status = :status " +
+            "AND la.startDate <= :endDate " +
+            "AND la.endDate >= :startDate")
+    Page<LeaveApplication> findByStatusAndDateRange(
+            @Param("status") LeaveApplicationStatus status,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable
+    );
+
+    // 신청자별 날짜 범위 검색
+    @Query("SELECT la FROM LeaveApplication la " +
+            "WHERE la.applicantId = :applicantId " +
+            "AND la.status = :status " +
+            "AND la.startDate <= :endDate " +
+            "AND la.endDate >= :startDate")
+    Page<LeaveApplication> findByApplicantIdAndStatusAndDateRange(
+            @Param("applicantId") String applicantId,
+            @Param("status") LeaveApplicationStatus status,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable
+    );
+
+    // 신청자별 상태 및 날짜 범위 검색
+    @Query("SELECT la FROM LeaveApplication la " +
+            "WHERE la.applicantId = :applicantId " +
+            "AND la.status IN :statuses " +
+            "AND la.startDate <= :endDate " +
+            "AND la.endDate >= :startDate")
+    Page<LeaveApplication> findByApplicantIdAndStatusInAndDateRange(
+            @Param("applicantId") String applicantId,
+            @Param("statuses") Set<LeaveApplicationStatus> statuses,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable
+    );
+
+    // 승인자별 상태 및 날짜 범위 검색
+    @Query("SELECT la FROM LeaveApplication la " +
+            "WHERE la.currentApproverId = :approverId " +
+            "AND la.status IN :statuses " +
+            "AND la.startDate <= :endDate " +
+            "AND la.endDate >= :startDate")
+    Page<LeaveApplication> findByCurrentApproverIdAndStatusInAndDateRange(
+            @Param("approverId") String approverId,
+            @Param("statuses") Set<LeaveApplicationStatus> statuses,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable
+    );
 }

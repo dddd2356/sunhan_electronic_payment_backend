@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import sunhan.sunhanbackend.config.DepartmentProperties;
+import sunhan.sunhanbackend.dto.response.VacationStatusResponseDto;
 import sunhan.sunhanbackend.entity.mysql.Department;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalLine;
@@ -37,6 +38,7 @@ import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleEntryRepos
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleTemplateRepository;
 import sunhan.sunhanbackend.service.PermissionService;
+import sunhan.sunhanbackend.service.VacationService;
 import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
 
 import java.time.DayOfWeek;
@@ -66,6 +68,7 @@ public class WorkScheduleService {
     private final DepartmentRepository departmentRepository;
     private final WorkScheduleTemplateRepository templateRepository;
     private final DeptDutyConfigRepository deptDutyConfigRepository;
+    private final VacationService vacationService;
 
     @Value("${holiday.api.key}")
     private String holidayApiKey;
@@ -156,10 +159,8 @@ public class WorkScheduleService {
                 return Integer.compare(bLevel, aLevel);
             }
 
-            // 2. JobLevel이 같으면 휴가 개수 비교 (내림차순/많은 순)
-            Double aTotal = a.getTotalVacationDays() != null ? a.getTotalVacationDays() : 0;
-            Double bTotal = b.getTotalVacationDays() != null ? b.getTotalVacationDays() : 0;
-            return bTotal.compareTo(aTotal); // 내림차순
+            // 휴가 정렬 제거 (JobLevel만 사용)
+            return 0;
         });
 
         // 해당 년도에 APPROVED된 이전 근무표 합계 계산 (모든 이전 달)
@@ -191,7 +192,19 @@ public class WorkScheduleService {
             entry.setNightDutyAdditional(actual - required); // 초기에는 -previousRequiredDuty가 될 가능성이 높음
 
             // 휴가 총계 설정 (유지)
-            entry.setVacationTotal(user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15.0);
+            try {
+                final Integer leaveCurrentYear = LocalDate.now().getYear();
+                VacationStatusResponseDto vacationStatus = vacationService.getVacationStatus(
+                        user.getUserId(),
+                        leaveCurrentYear
+                );
+                entry.setVacationTotal(vacationStatus.getTotalVacationDays());
+                entry.setVacationUsedTotal(vacationStatus.getUsedVacationDays());
+            } catch (Exception e) {
+                log.warn("연차 정보 조회 실패: userId={}", user.getUserId(), e);
+                entry.setVacationTotal(15.0);
+                entry.setVacationUsedTotal(0.0);
+            }
             entry.setVacationUsedThisMonth(0.0);  // 초기 0
 
             // ✅ 새로 추가: 년도 첫 생성 확인 및 누적
@@ -277,8 +290,19 @@ public class WorkScheduleService {
             newEntry.setNightDutyRequired(previousRequiredDuty);
 
             // 4-3. 휴가 총계 설정 (UserEntity 데이터 사용)
-            newEntry.setVacationTotal(user.getTotalVacationDays() != null ? user.getTotalVacationDays() : 15.0);
-            newEntry.setVacationUsedTotal(user.getUsedVacationDays() != null ? user.getUsedVacationDays() : 0.0);
+            try {
+                final Integer currentYear = LocalDate.now().getYear();
+                VacationStatusResponseDto vacationStatus = vacationService.getVacationStatus(
+                        user.getUserId(),
+                        currentYear
+                );
+                newEntry.setVacationTotal(vacationStatus.getTotalVacationDays());
+                newEntry.setVacationUsedTotal(vacationStatus.getUsedVacationDays());
+            } catch (Exception e) {
+                log.warn("연차 정보 조회 실패: userId={}", user.getUserId(), e);
+                newEntry.setVacationTotal(15.0);
+                newEntry.setVacationUsedTotal(0.0);
+            }
 
             // 4-4. 저장
             entryRepository.save(newEntry);
@@ -1340,8 +1364,17 @@ public class WorkScheduleService {
             WorkScheduleEntry entry = new WorkScheduleEntry(schedule, userId, order++);
             entry.setDeptCode(user.getDeptCode()); // 원 소속 부서 저장
             entry.setUserName(user.getUserName());
-            entry.setVacationTotal(user.getTotalVacationDays() != null ?
-                    user.getTotalVacationDays() : 15.0);
+            try {
+                final Integer currentYear = LocalDate.now().getYear();
+                VacationStatusResponseDto vacationStatus = vacationService.getVacationStatus(
+                        user.getUserId(),
+                        currentYear
+                );
+                entry.setVacationTotal(vacationStatus.getTotalVacationDays());
+            } catch (Exception e) {
+                log.warn("연차 정보 조회 실패: userId={}", user.getUserId(), e);
+                entry.setVacationTotal(15.0);
+            }
             entry.setIsDeleted(false);
 
             // 이전 달 의무 나이트 설정 (기존 로직 재사용)
@@ -1469,8 +1502,17 @@ public class WorkScheduleService {
             WorkScheduleEntry entry = new WorkScheduleEntry(schedule, userId, ++maxOrder);
             entry.setDeptCode(user.getDeptCode());
             entry.setUserName(user.getUserName());
-            entry.setVacationTotal(user.getTotalVacationDays() != null ?
-                    user.getTotalVacationDays() : 15.0);
+            try {
+                final Integer currentYear = LocalDate.now().getYear();
+                VacationStatusResponseDto vacationStatus = vacationService.getVacationStatus(
+                        user.getUserId(),
+                        currentYear
+                );
+                entry.setVacationTotal(vacationStatus.getTotalVacationDays());
+            } catch (Exception e) {
+                log.warn("연차 정보 조회 실패: userId={}", user.getUserId(), e);
+                entry.setVacationTotal(15.0);
+            }
             entry.setIsDeleted(false);
 
             entryRepository.save(entry);
@@ -1753,5 +1795,97 @@ public class WorkScheduleService {
             log.error("공휴일 조회 실패: year={}", year, e);
             return Collections.emptyList();
         }
+    }
+
+    /**
+     * 개인별 근무현황 조회 (MainPage용)
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getMyPersonalSchedule(String userId, String yearMonth) {
+        UserEntity user = userRepository.findByUserId(userId)
+                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
+
+        // 1. 해당 월의 승인된 근무표 조회 (일반 + 커스텀)
+        List<WorkSchedule> approvedSchedules = new ArrayList<>();
+
+        // 일반 근무표
+        if (user.getDeptCode() != null) {
+            scheduleRepository.findByScheduleYearMonthAndDeptCodeAndApprovalStatus(
+                    yearMonth, user.getDeptCode(), WorkSchedule.ScheduleStatus.APPROVED
+            ).ifPresent(approvedSchedules::add);
+        }
+
+        // 커스텀 근무표 (내가 참여한)
+        List<WorkSchedule> customSchedules = scheduleRepository
+                .findByScheduleYearMonthAndApprovalStatus(yearMonth, WorkSchedule.ScheduleStatus.APPROVED)
+                .stream()
+                .filter(s -> Boolean.TRUE.equals(s.getIsCustom()))
+                .filter(s -> entryRepository.findByWorkScheduleIdAndUserId(s.getId(), userId)
+                        .filter(e -> !e.getIsDeleted())
+                        .isPresent())
+                .collect(Collectors.toList());
+
+        approvedSchedules.addAll(customSchedules);
+
+        if (approvedSchedules.isEmpty()) {
+            return Map.of(
+                    "yearMonth", yearMonth,
+                    "hasSchedule", false,
+                    "workData", Collections.emptyMap()
+            );
+        }
+
+        // 2. 내 엔트리 찾기 (첫 번째 근무표 우선)
+        WorkSchedule mySchedule = approvedSchedules.get(0);
+        WorkScheduleEntry myEntry = entryRepository
+                .findByWorkScheduleIdAndUserId(mySchedule.getId(), userId)
+                .orElse(null);
+
+        if (myEntry == null || myEntry.getIsDeleted()) {
+            return Map.of(
+                    "yearMonth", yearMonth,
+                    "hasSchedule", false,
+                    "workData", Collections.emptyMap()
+            );
+        }
+
+        // 3. workData 파싱
+        Map<String, String> workData = new HashMap<>();
+        if (myEntry.getWorkDataJson() != null) {
+            try {
+                workData = objectMapper.readValue(
+                        myEntry.getWorkDataJson(),
+                        new TypeReference<Map<String, String>>() {}
+                );
+            } catch (JsonProcessingException e) {
+                log.error("workData 파싱 실패: entryId={}", myEntry.getId(), e);
+            }
+        }
+
+        // 해당 근무표의 당직 설정(DeptDutyConfig) 조회
+        DeptDutyConfig config = deptDutyConfigRepository.findByScheduleId(mySchedule.getId())
+                .orElse(null);
+
+        // 설정이 없으면 기본값 "나이트", 있으면 설정된 displayName ("당직", "온콜" 등) 사용
+        String dutyDisplayName = (config != null && config.getDisplayName() != null)
+                ? config.getDisplayName()
+                : "나이트";
+
+        // 4. 통계 정보
+        Map<String, Object> result = new HashMap<>();
+        result.put("yearMonth", yearMonth);
+        result.put("hasSchedule", true);
+        result.put("workData", workData);
+        result.put("nightDutyActual", myEntry.getNightDutyActual());
+        result.put("dutyDisplayName", dutyDisplayName);
+        result.put("offCount", myEntry.getOffCount());
+        result.put("vacationUsedThisMonth", myEntry.getVacationUsedThisMonth());
+        result.put("deptName", mySchedule.getIsCustom() ?
+                mySchedule.getCustomDeptName() :
+                departmentRepository.findById(mySchedule.getDeptCode())
+                        .map(Department::getDeptName)
+                        .orElse(mySchedule.getDeptCode()));
+
+        return result;
     }
 }

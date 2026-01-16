@@ -9,7 +9,23 @@ public class VacationStatusResponseDto {
     private String userId;
     private String userName;
     private String deptName;
-    private Double totalVacationDays; // Double
-    private Double usedVacationDays; // Double
-    private Double remainingVacationDays; // Double
+    private Integer year;
+
+    // 연차만 (경조/특별은 차감 없으므로 제외)
+    private Double annualCarryoverDays;
+    private Double annualRegularDays;
+    private Double annualTotalDays;
+    // 사용 정보 추가
+    private Double usedCarryoverDays;      // 이월 사용
+    private Double usedRegularDays;        // 정상 사용
+    private Double annualUsedDays;
+    private Double annualRemainingDays;
+
+    // 하위 호환
+    @Deprecated
+    private Double totalVacationDays;
+    @Deprecated
+    private Double usedVacationDays;
+    @Deprecated
+    private Double remainingVacationDays;
 }

@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.entity.mysql.position.Position;
+import sunhan.sunhanbackend.enums.PermissionType;
+import sunhan.sunhanbackend.repository.mysql.UserPermissionRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.repository.mysql.position.PositionRepository;
 
@@ -19,7 +21,7 @@ public class PositionService {
 
     private final PositionRepository positionRepository;
     private final UserRepository userRepository;
-
+    private final UserPermissionRepository userPermissionRepository;
     /**
      * 직책 생성
      */
@@ -129,15 +131,24 @@ public class PositionService {
         UserEntity user = userRepository.findByUserId(userId)
                 .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다: " + userId));
 
-        // 부서장(jobLevel=1) 이상이면서 같은 부서이거나, 상위 관리자(jobLevel>=2)인 경우
-        int jobLevel = Integer.parseInt(user.getJobLevel());
-
-        if (jobLevel == 1 && !user.getDeptCode().equals(deptCode)) {
-            throw new SecurityException("해당 부서의 직책을 관리할 권한이 없습니다.");
+        // 1. 슈퍼 관리자(JobLevel 6)는 프리패스 (안전장치로 유지 권장)
+        if ("6".equals(user.getJobLevel())) {
+            return;
         }
 
-        if (jobLevel == 0) {
-            throw new SecurityException("직책을 관리할 권한이 없습니다.");
+        // ✅ 2. WORK_SCHEDULE_CREATE 권한 확인으로 로직 변경
+        boolean hasPermission = userPermissionRepository.existsByUserIdAndPermissionType(
+                userId,
+                PermissionType.WORK_SCHEDULE_CREATE
+        );
+
+        if (!hasPermission) {
+            throw new SecurityException("직책 관리 권한(WORK_SCHEDULE_CREATE)이 없습니다.");
+        }
+
+        // 3. 권한이 있더라도, 본인 부서가 아니면 관리 불가 (슈퍼관리자 제외)
+        if (!user.getDeptCode().equals(deptCode)) {
+            throw new SecurityException("타 부서의 직책을 관리할 수 없습니다.");
         }
     }
 }

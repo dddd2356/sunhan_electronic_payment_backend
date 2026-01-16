@@ -2,6 +2,7 @@ package sunhan.sunhanbackend.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -25,9 +26,7 @@ import sunhan.sunhanbackend.dto.response.AttachmentResponseDto;
 import sunhan.sunhanbackend.dto.response.LeaveApplicationResponseDto;
 import sunhan.sunhanbackend.dto.request.LeaveApplicationUpdateFormRequestDto;
 import sunhan.sunhanbackend.dto.request.SignLeaveApplicationRequestDto;
-import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
-import sunhan.sunhanbackend.entity.mysql.LeaveApplicationAttachment;
-import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.entity.mysql.*;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalLine;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStep;
 import sunhan.sunhanbackend.entity.mysql.approval.DocumentApprovalProcess;
@@ -35,10 +34,7 @@ import sunhan.sunhanbackend.enums.*;
 import sunhan.sunhanbackend.enums.approval.ApprovalProcessStatus;
 import sunhan.sunhanbackend.enums.approval.ApproverType;
 import sunhan.sunhanbackend.enums.approval.DocumentType;
-import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
-import sunhan.sunhanbackend.repository.mysql.LeaveApplicationAttachmentRepository;
-import sunhan.sunhanbackend.repository.mysql.LeaveApplicationRepository;
-import sunhan.sunhanbackend.repository.mysql.UserRepository;
+import sunhan.sunhanbackend.repository.mysql.*;
 import sunhan.sunhanbackend.repository.mysql.approval.ApprovalLineRepository;
 import sunhan.sunhanbackend.repository.mysql.approval.DocumentApprovalProcessRepository;
 import sunhan.sunhanbackend.service.approval.ApprovalProcessService;
@@ -77,6 +73,8 @@ public class LeaveApplicationService {
     private String uploadDir;
     private final ApprovalLineRepository approvalLineRepository;
     private final DepartmentRepository departmentRepository;
+    private final VacationService vacationService;
+    private final UserAnnualVacationHistoryRepository vacationHistoryRepository;
 
     private String toIsoString(Object maybeDate) {
         if (maybeDate == null) return LocalDateTime.now().format(ISO_LOCAL);
@@ -379,14 +377,14 @@ public class LeaveApplicationService {
             throw new AccessDeniedException("휴가원 작성자만 수정할 수 있습니다.");
         }
 
-        // 상태 확인 (DRAFT나 REJECTED 상태에서만 수정 가능)
+        // 상태 확인
         if (application.getStatus() != LeaveApplicationStatus.DRAFT &&
                 application.getStatus() != LeaveApplicationStatus.REJECTED) {
             throw new IllegalStateException("드래프트 또는 반려 상태에서만 수정할 수 있습니다.");
         }
 
         try {
-            // 기존 formDataJson을 Map으로 파싱하여 기존 데이터 보존
+            // 기존 formDataJson 병합 로직...
             Map<String, Object> existingFormData = new HashMap<>();
             if (application.getFormDataJson() != null && !application.getFormDataJson().isEmpty()) {
                 try {
@@ -396,22 +394,17 @@ public class LeaveApplicationService {
                 }
             }
 
-            // 새로운 데이터를 Map으로 변환
             Map<String, Object> newFormData = objectMapper.convertValue(updateDto, new TypeReference<Map<String, Object>>() {});
-
-            // 기존 데이터와 새 데이터 병합 (새 데이터가 우선)
             existingFormData.putAll(newFormData);
 
-            // 서명 정보는 별도로 보존 (덮어쓰지 않음)
             if (updateDto.getSignatures() != null) {
                 existingFormData.put("signatures", updateDto.getSignatures());
             }
 
-            // 병합된 데이터를 JSON으로 저장
             String mergedFormDataJson = objectMapper.writeValueAsString(existingFormData);
             application.setFormDataJson(mergedFormDataJson);
 
-            // DTO의 데이터를 바탕으로 엔티티의 다른 필드들도 업데이트
+            // DTO 기반으로 엔티티 업데이트 (여기서 LeaveApplicationDay도 생성됨)
             updateApplicationFromDto(application, updateDto);
 
         } catch (JsonProcessingException e) {
@@ -773,22 +766,17 @@ public class LeaveApplicationService {
         // 저장 -> 트랜잭션 내에서 실행
         LeaveApplication saved = leaveApplicationRepository.saveAndFlush(application);
 
-        // ✅ [추가] 연차 여부 확인
-        boolean isAnnualLeave = false;
-        try {
-            Map<String, Object> formData = objectMapper.readValue(saved.getFormDataJson(), new TypeReference<Map<String, Object>>() {});
-            List<String> leaveTypes = (List<String>) formData.get("leaveTypes");
-            if (leaveTypes != null && leaveTypes.contains("연차휴가")) {
-                isAnnualLeave = true;
-            }
-        } catch (Exception e) {
-            log.warn("leaveTypes 파싱 실패: {}", e.getMessage());
-        }
-
         // ✅ 연차인 경우에만 차감
-        if (isAnnualLeave && saved.getTotalDays() != null && saved.getTotalDays() > 0) {
+        if (saved.getLeaveType() == LeaveType.ANNUAL_LEAVE
+                && saved.getTotalDays() != null
+                && saved.getTotalDays() > 0) {
             try {
-                deductVacationDaysInSameTransaction(saved.getApplicantId(), saved.getTotalDays());
+                // ✅ startDate 추가
+                deductVacationDaysInSameTransaction(
+                        saved.getApplicantId(),
+                        saved.getTotalDays(),
+                        saved.getStartDate()
+                );
                 log.info("전결 승인 시 연차 차감 완료: userId={}, days={}",
                         saved.getApplicantId(), saved.getTotalDays());
             } catch (Exception e) {
@@ -825,9 +813,16 @@ public class LeaveApplicationService {
     }
 
     /**
-     * 휴가 정보를 DTO로부터 업데이트하는 헬퍼 메서드 (수정됨 - 연차휴가만 일수 차감)
+     * 휴가 정보를 DTO로부터 업데이트하는 헬퍼 메서드
      */
     private void updateApplicationFromDto(LeaveApplication application, LeaveApplicationUpdateFormRequestDto dto) {
+        // ⭐⭐⭐ [핵심 추가] 기존 days 삭제 및 flush
+        if (application.getDays() != null && !application.getDays().isEmpty()) {
+            application.getDays().forEach(day -> day.setLeaveApplication(null));
+            application.getDays().clear();
+            leaveApplicationRepository.flush();  // ← 이게 핵심!
+        }
+
         // 대직자 정보 설정
         String substituteId = (dto.getSubstituteInfo() != null) ? dto.getSubstituteInfo().getUserId() : null;
         application.setSubstituteId(substituteId);
@@ -837,7 +832,6 @@ public class LeaveApplicationService {
         if (dto.getLeaveTypes() != null && !dto.getLeaveTypes().isEmpty()) {
             String koreanLeaveType = dto.getLeaveTypes().get(0);
 
-            // LeaveType Enum에서 한글 이름으로 찾기
             for (LeaveType type : LeaveType.values()) {
                 if (type.getDisplayName().equals(koreanLeaveType)) {
                     matchedType = type;
@@ -853,60 +847,86 @@ public class LeaveApplicationService {
             }
         }
 
-        // 연차휴가가 아닌 경우 totalDays를 0으로 설정하고 일수 계산 로직 건너뛰기 ★★★
-        boolean isAnnualLeave = dto.getLeaveTypes() != null &&
-                dto.getLeaveTypes().contains("연차휴가") &&
-                matchedType == LeaveType.ANNUAL_LEAVE;
+        // ✅ LeaveApplicationDay 생성 (기존 것은 clear)
+        List<LeaveApplicationDay> days = new ArrayList<>();
 
-        // 제거: if (!isAnnualLeave) { application.setTotalDays(0.0); setStartEndDatesFromDto(application, dto); return; }  // 모든 휴가에서 계산
+        // flexiblePeriods 처리
+        if (dto.getFlexiblePeriods() != null) {
+            for (Map<String, String> period : dto.getFlexiblePeriods()) {
+                String startDateStr = period.get("startDate");
+                String endDateStr = period.get("endDate");
 
-        // [수정] 연차 여부 무시하고 항상 계산 (다른 휴가도 totalDays 설정)
-        // totalDays 설정: DTO의 값이 우선하며, 없는 경우에만 재계산
-        Double totalDays = dto.getTotalDays();
-        if (totalDays == null || totalDays <= 0) {
-            double calculatedTotalDays = 0.0;
+                if (startDateStr != null && !startDateStr.isEmpty() &&
+                        endDateStr != null && !endDateStr.isEmpty()) {
 
-            // 개별 기간(flexiblePeriods) 계산
-            if (dto.getFlexiblePeriods() != null) {
-                for (Map<String, String> period : dto.getFlexiblePeriods()) {
-                    String startDateStr = period.get("startDate");
-                    String endDateStr = period.get("endDate");
+                    LocalDate startDate = LocalDate.parse(startDateStr);
+                    LocalDate endDate = LocalDate.parse(endDateStr);
+                    String halfDayOption = period.get("halfDayOption");
 
-                    if (startDateStr != null && !startDateStr.isEmpty() && endDateStr != null && !endDateStr.isEmpty()) {
-                        LocalDate startDate = LocalDate.parse(startDateStr);
-                        LocalDate endDate = LocalDate.parse(endDateStr);
-                        long days = ChronoUnit.DAYS.between(startDate, endDate) + 1;
-                        String halfDayOption = period.get("halfDayOption");
-                        if ("morning".equals(halfDayOption) || "afternoon".equals(halfDayOption)) {
-                            calculatedTotalDays += 0.5;
-                        } else {
-                            calculatedTotalDays += days;
+                    // ✅ 반차 처리
+                    if ("morning".equals(halfDayOption) || "afternoon".equals(halfDayOption)) {
+                        HalfDayType halfDayType = "morning".equals(halfDayOption)
+                                ? HalfDayType.MORNING
+                                : HalfDayType.AFTERNOON;
+
+                        // 반차는 단일 날짜만 생성
+                        LeaveApplicationDay day = new LeaveApplicationDay(
+                                startDate,
+                                halfDayType,
+                                0.5
+                        );
+                        day.setLeaveApplication(application);
+                        days.add(day);
+                    } else {
+                        // 종일인 경우 날짜 범위 루프
+                        LocalDate currentDate = startDate;
+                        while (!currentDate.isAfter(endDate)) {
+                            LeaveApplicationDay day = new LeaveApplicationDay(
+                                    currentDate,
+                                    HalfDayType.ALL_DAY,
+                                    1.0
+                            );
+                            day.setLeaveApplication(application);
+                            days.add(day);
+                            currentDate = currentDate.plusDays(1);
                         }
                     }
                 }
             }
-
-            // 연속 기간(consecutivePeriod) 계산
-            if (dto.getConsecutivePeriod() != null) {
-                String startDateStr = dto.getConsecutivePeriod().get("startDate");
-                String endDateStr = dto.getConsecutivePeriod().get("endDate");
-
-                if (startDateStr != null && !startDateStr.isEmpty() && endDateStr != null && !endDateStr.isEmpty()) {
-                    LocalDate startDate = LocalDate.parse(startDateStr);
-                    LocalDate endDate = LocalDate.parse(endDateStr);
-                    calculatedTotalDays += ChronoUnit.DAYS.between(startDate, endDate) + 1;
-                }
-            }
-
-            if (calculatedTotalDays == 0.0) {
-                throw new IllegalArgumentException("유효한 휴가 기간이 입력되어야 합니다.");
-            }
-            application.setTotalDays(calculatedTotalDays);
-        } else {
-            application.setTotalDays(totalDays);
         }
 
-        // 시작일(startDate)과 종료일(endDate) 설정
+        // consecutivePeriod 처리
+        if (dto.getConsecutivePeriod() != null) {
+            String startDateStr = dto.getConsecutivePeriod().get("startDate");
+            String endDateStr = dto.getConsecutivePeriod().get("endDate");
+
+            if (startDateStr != null && !startDateStr.isEmpty() &&
+                    endDateStr != null && !endDateStr.isEmpty()) {
+                LocalDate startDate = LocalDate.parse(startDateStr);
+                LocalDate endDate = LocalDate.parse(endDateStr);
+
+                LocalDate currentDate = startDate;
+                while (!currentDate.isAfter(endDate)) {
+                    LeaveApplicationDay day = new LeaveApplicationDay(
+                            currentDate,
+                            HalfDayType.ALL_DAY,
+                            1.0
+                    );
+                    day.setLeaveApplication(application);
+                    days.add(day);
+                    currentDate = currentDate.plusDays(1);
+                }
+            }
+        }
+
+        // ✅ days 개수로 검증
+        if (days.isEmpty()) {
+            throw new IllegalArgumentException("유효한 휴가 기간이 입력되어야 합니다.");
+        }
+
+        application.setDays(days);  // ← 이 부분이 핵심!
+
+        // 시작일/종료일 설정
         setStartEndDatesFromDto(application, dto);
     }
 
@@ -1134,9 +1154,11 @@ public class LeaveApplicationService {
                 && application.getTotalDays() > 0) {
 
             try {
-                restoreVacationDaysInSameTransaction(application.getApplicantId(), application.getTotalDays());
-                log.info("반려 시 연차 복구: userId={}, days={}",
-                        application.getApplicantId(), application.getTotalDays());
+                restoreVacationDaysInSameTransaction(
+                        application.getApplicantId(),
+                        application.getTotalDays(),
+                        application.getStartDate()
+                );
             } catch (Exception e) {
                 log.error("연차 복구 실패", e);
                 throw new IllegalStateException("연차 복구 실패: " + e.getMessage());
@@ -1189,7 +1211,7 @@ public class LeaveApplicationService {
         if (application.getSubstituteId() != null) ids.add(application.getSubstituteId());
         ids.add(userId);
 
-        List<UserEntity> users = userRepository.findByUserIdIn(ids);
+        List<UserEntity> users = userRepository.findByUserIdInIncludingAdmin(ids);
         Map<String, UserEntity> userMap = users.stream()
                 .collect(Collectors.toMap(UserEntity::getUserId, Function.identity()));
 
@@ -1200,10 +1222,19 @@ public class LeaveApplicationService {
         UserEntity currentUser = userMap.get(userId);
         if (currentUser == null) throw new EntityNotFoundException("사용자 정보를 찾을 수 없습니다.");
 
+        // ✅ 로그 추가
+        log.info("canView 체크 전: userId={}, applicantId={}, currentUserId={}",
+                userId, application.getApplicantId(), currentUser.getUserId());
+        log.info("currentUser 정보: role={}, jobLevel={}, deptCode={}",
+                currentUser.getRole(), currentUser.getJobLevel(), currentUser.getDeptCode());
+
         if (!canView(currentUser, application, applicant)) {
+            log.error("조회 권한 없음: userId={}, applicantId={}, status={}",
+                    userId, application.getApplicantId(), application.getStatus());  // ✅ 추가
             throw new AccessDeniedException("해당 휴가원을 조회할 권한이 없습니다.");
         }
 
+        log.info("조회 권한 확인 완료: userId={}", userId);  // ✅ 추가
         return LeaveApplicationResponseDto.fromEntity(application, applicant, substitute);
     }
 
@@ -1415,27 +1446,55 @@ public class LeaveApplicationService {
      * 휴가원 조회 권한 확인
      */
     private boolean canView(UserEntity viewer, LeaveApplication application, UserEntity applicant) {
+        log.info("canView 시작: viewerId={}, applicantId={}", viewer.getUserId(), applicant.getUserId());
+
+        // 0. 슈퍼 어드민
+        if (viewer.isSuperAdmin()) {
+            log.info("슈퍼 어드민으로 조회 허용: userId={}", viewer.getUserId());
+            return true;
+        }
+
         // 1. 신청자 본인
         if (viewer.getUserId().equals(application.getApplicantId())) {
+            log.info("신청자 본인으로 조회 허용: userId={}", viewer.getUserId());
             return true;
         }
+
         // 2. 대직자
         if (application.getSubstituteId() != null && viewer.getUserId().equals(application.getSubstituteId())) {
+            log.info("대직자로 조회 허용: userId={}", viewer.getUserId());
             return true;
         }
-        // 3. 현재 승인 단계의 승인자 또는 상위 승인자 (권한 있는 자)
-        // applicant 파라미터를 사용하여 canApprove의 DB 호출을 피함
+
+        // ✅ 3. HR 권한자 체크
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(viewer.getUserId());
+        log.info("사용자 권한 조회: userId={}, permissions={}", viewer.getUserId(), permissions);
+
+        if (permissions.contains(PermissionType.HR_LEAVE_APPLICATION)) {
+            log.info("HR 권한으로 조회 허용: userId={}", viewer.getUserId());
+            return true;
+        }
+
+        // 4. 현재 승인자
         if (application.getCurrentApprovalStep() != null && canApprove(viewer, application, applicant)) {
+            log.info("현재 승인자로 조회 허용: userId={}", viewer.getUserId());
             return true;
         }
-        // 4. 시스템 관리자
+
+        // 5. 시스템 관리자
         if (viewer.isAdmin()) {
+            log.info("시스템 관리자로 조회 허용: userId={}", viewer.getUserId());
             return true;
         }
-        // 5. 기타 상위 관리자 (부서장 예시)
+
+        // 6. 부서장
         if ("1".equals(viewer.getJobLevel()) && viewer.getDeptCode().equals(applicant.getDeptCode())) {
+            log.info("부서장으로 조회 허용: userId={}", viewer.getUserId());
             return true;
         }
+
+        log.warn("조회 권한 없음: userId={}, role={}, jobLevel={}, deptCode={}",
+                viewer.getUserId(), viewer.getRole(), viewer.getJobLevel(), viewer.getDeptCode());
         return false;
     }
 
@@ -1609,22 +1668,17 @@ public class LeaveApplicationService {
             // ✅ 먼저 application 저장 (flush하여 DB에 반영)
             LeaveApplication savedApp = leaveApplicationRepository.saveAndFlush(application);
 
-            // ✅ [추가] 연차 여부 확인
-            boolean isAnnualLeave = false;
-            try {
-                Map<String, Object> formData = objectMapper.readValue(savedApp.getFormDataJson(), new TypeReference<Map<String, Object>>() {});
-                List<String> leaveTypes = (List<String>) formData.get("leaveTypes");
-                if (leaveTypes != null && leaveTypes.contains("연차휴가")) {
-                    isAnnualLeave = true;
-                }
-            } catch (Exception e) {
-                log.warn("leaveTypes 파싱 실패: {}", e.getMessage());
-            }
-
             // ✅ 연차인 경우에만 차감
-            if (isAnnualLeave && savedApp.getTotalDays() != null && savedApp.getTotalDays() > 0) {
+            if (savedApp.getLeaveType() == LeaveType.ANNUAL_LEAVE
+                    && savedApp.getTotalDays() != null
+                    && savedApp.getTotalDays() > 0) {
                 try {
-                    deductVacationDaysInSameTransaction(savedApp.getApplicantId(), savedApp.getTotalDays());
+                    // ✅ startDate 추가
+                    deductVacationDaysInSameTransaction(
+                            savedApp.getApplicantId(),
+                            savedApp.getTotalDays(),
+                            savedApp.getStartDate()
+                    );
                 } catch (Exception e) {
                     log.error("연차 차감 실패: {}", e.getMessage(), e);
                     throw new IllegalStateException("연차 차감 실패: " + e.getMessage());
@@ -1641,22 +1695,8 @@ public class LeaveApplicationService {
     /**
      * ✅ 같은 트랜잭션 내에서 연차 차감 (REQUIRES_NEW 제거)
      */
-    private void deductVacationDaysInSameTransaction(String applicantId, Double days) {
-        // ✅ 비관적 락을 사용하여 UserEntity 조회
-        UserEntity applicant = userRepository.findByUserIdWithLock(applicantId)
-                .orElseThrow(() -> new EntityNotFoundException("신청자를 찾을 수 없습니다."));
-
-        try {
-            applicant.useVacationDays(days);
-            userRepository.save(applicant);
-            log.info("연차 차감 완료: userId={}, totalDays={}, remaining={}",
-                    applicant.getUserId(),
-                    days,
-                    applicant.getRemainingAnnualLeave());
-        } catch (IllegalStateException e) {
-            log.error("연차 차감 실패: {}", e.getMessage());
-            throw new IllegalStateException("연차 차감 실패: " + e.getMessage());
-        }
+    private void deductVacationDaysInSameTransaction(String applicantId, Double days, LocalDate startDate) {
+        vacationService.deductVacationDays(applicantId, days, startDate);
     }
 
     /**
@@ -1667,7 +1707,7 @@ public class LeaveApplicationService {
             String signatureType,
             String text,
             String signatureDate,
-            String finalApproverId  // ✅ 추가: 전결 처리자 ID
+            String finalApproverId
     ) {
         try {
             Map<String, Object> formData;
@@ -1762,7 +1802,12 @@ public class LeaveApplicationService {
                 && application.getTotalDays() > 0) {
 
             try {
-                restoreVacationDaysInSameTransaction(application.getApplicantId(), application.getTotalDays());
+                // ✅ startDate 추가
+                restoreVacationDaysInSameTransaction(
+                        application.getApplicantId(),
+                        application.getTotalDays(),
+                        application.getStartDate()
+                );
                 log.info("결재라인 반려 시 연차 복구: userId={}, days={}",
                         application.getApplicantId(), application.getTotalDays());
             } catch (Exception e) {
@@ -1783,19 +1828,8 @@ public class LeaveApplicationService {
     /**
      * ✅ 같은 트랜잭션 내에서 연차 복구
      */
-    private void restoreVacationDaysInSameTransaction(String userId, Double days) {
-        UserEntity user = userRepository.findByUserIdWithLock(userId)
-                .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다: " + userId));
-
-        try {
-            user.restoreVacationDays(days);
-            userRepository.save(user);
-            log.info("연차 복구 완료: userId={}, restoredDays={}, remaining={}",
-                    user.getUserId(), days, user.getRemainingAnnualLeave());
-        } catch (Exception e) {
-            log.error("연차 복구 실패: {}", e.getMessage());
-            throw new IllegalStateException("연차 복구 실패: " + e.getMessage());
-        }
+    private void restoreVacationDaysInSameTransaction(String userId, Double days, LocalDate startDate) {
+        vacationService.restoreVacationDays(userId, days, startDate);
     }
 
     @Transactional
@@ -1820,14 +1854,19 @@ public class LeaveApplicationService {
         }
 
         // ✅ ANNUAL_LEAVE만 복구
-        if (application.getLeaveType() == LeaveType.ANNUAL_LEAVE && application.getTotalDays() != null && application.getTotalDays() > 0) {
-            UserEntity applicant = userRepository.findByUserIdWithLock(application.getApplicantId())
-                    .orElseThrow(() -> new EntityNotFoundException("신청자를 찾을 수 없습니다."));
+        if (application.getLeaveType() == LeaveType.ANNUAL_LEAVE
+                && application.getTotalDays() != null
+                && application.getTotalDays() > 0) {
 
             try {
-                applicant.restoreVacationDays(application.getTotalDays());
-                userRepository.save(applicant);
-                log.info("연차 복구 완료: userId={}, days={}", applicant.getUserId(), application.getTotalDays());
+                // ✅ VacationService 사용으로 변경
+                restoreVacationDaysInSameTransaction(
+                        application.getApplicantId(),
+                        application.getTotalDays(),
+                        application.getStartDate()
+                );
+                log.info("연차 복구 완료: userId={}, days={}",
+                        application.getApplicantId(), application.getTotalDays());
             } catch (Exception e) {
                 log.error("연차 복구 실패", e);
                 throw new IllegalStateException("연차 복구 중 오류가 발생했습니다.");
@@ -1871,5 +1910,110 @@ public class LeaveApplicationService {
             dto.setApplicantDeptName(applicant != null ? applicant.getDeptCode() : null);
         }
         return dto;
+    }
+
+    /**
+     * 날짜 범위로 완료된 휴가원 검색 (관리자용)
+     */
+    public Page<LeaveApplicationResponseDto> getCompletedApplicationsByDateRange(
+            String userId,
+            LocalDate startDate,
+            LocalDate endDate,
+            Pageable pageable
+    ) {
+        UserEntity currentUser = userService.getUserInfo(userId);
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(currentUser.getUserId());
+        boolean isHrStaff = currentUser.isAdmin() &&
+                permissions.contains(PermissionType.HR_LEAVE_APPLICATION);
+
+        Page<LeaveApplication> page;
+
+        if (isHrStaff) {
+            // 관리자는 모든 휴가원 검색
+            page = leaveApplicationRepository.findByStatusAndDateRange(
+                    LeaveApplicationStatus.APPROVED,
+                    startDate,
+                    endDate,
+                    pageable
+            );
+        } else {
+            // 일반 사용자는 본인 것만 검색
+            page = leaveApplicationRepository.findByApplicantIdAndStatusAndDateRange(
+                    userId,
+                    LeaveApplicationStatus.APPROVED,
+                    startDate,
+                    endDate,
+                    pageable
+            );
+        }
+
+        return page.map(app -> {
+            UserEntity applicant = userService.getUserInfo(app.getApplicantId());
+            UserEntity substitute = app.getSubstituteId() != null ?
+                    userService.getUserInfo(app.getSubstituteId()) : null;
+            return LeaveApplicationResponseDto.fromEntity(app, applicant, substitute);
+        });
+    }
+
+    /**
+     * 내 휴가원 날짜 범위 검색
+     */
+    public Page<LeaveApplicationResponseDto> getMyApplicationsByDateRange(
+            String applicantId,
+            LocalDate startDate,
+            LocalDate endDate,
+            Pageable pageable
+    ) {
+        Set<LeaveApplicationStatus> myStatuses = Set.of(
+                LeaveApplicationStatus.DRAFT,
+                LeaveApplicationStatus.PENDING,
+                LeaveApplicationStatus.REJECTED
+        );
+
+        Page<LeaveApplication> page = leaveApplicationRepository
+                .findByApplicantIdAndStatusInAndDateRange(
+                        applicantId,
+                        myStatuses,
+                        startDate,
+                        endDate,
+                        pageable
+                );
+
+        return page.map(app -> {
+            UserEntity applicant = userService.getUserInfo(app.getApplicantId());
+            UserEntity substitute = app.getSubstituteId() != null ?
+                    userService.getUserInfo(app.getSubstituteId()) : null;
+            return LeaveApplicationResponseDto.fromEntity(app, applicant, substitute);
+        });
+    }
+
+    /**
+     * 승인 대기 날짜 범위 검색
+     */
+    public Page<LeaveApplicationResponseDto> getPendingApplicationsByDateRange(
+            String approverId,
+            LocalDate startDate,
+            LocalDate endDate,
+            Pageable pageable
+    ) {
+        Set<LeaveApplicationStatus> pendingStatuses = Set.of(
+                LeaveApplicationStatus.PENDING
+        );
+
+        Page<LeaveApplication> page = leaveApplicationRepository
+                .findByCurrentApproverIdAndStatusInAndDateRange(
+                        approverId,
+                        pendingStatuses,
+                        startDate,
+                        endDate,
+                        pageable
+                );
+
+        return page.map(app -> {
+            UserEntity applicant = userService.getUserInfo(app.getApplicantId());
+            UserEntity substitute = app.getSubstituteId() != null ?
+                    userService.getUserInfo(app.getSubstituteId()) : null;
+            return LeaveApplicationResponseDto.fromEntity(app, applicant, substitute);
+        });
     }
 }

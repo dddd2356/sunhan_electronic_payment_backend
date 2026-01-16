@@ -11,8 +11,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.*;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -26,8 +28,10 @@ import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.service.LeaveApplicationService;
 import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.UserService;
+import sunhan.sunhanbackend.service.VacationService;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -940,4 +944,102 @@ public class LeaveApplicationController {
                     .body(Map.of("error", e.getMessage()));
         }
     }
+
+
+    /**
+     * 날짜 범위로 완료된 휴가원 검색
+     */
+    @GetMapping("/completed/search")
+    public ResponseEntity<Page<LeaveApplicationResponseDto>> searchCompletedApplications(
+            Authentication auth,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        String userId = auth.getName();
+        try {
+            int safeSize = Math.max(1, Math.min(size, 100));
+            Pageable pageable = PageRequest.of(Math.max(0, page), safeSize,
+                    Sort.by(Sort.Direction.DESC, "startDate"));
+
+            Page<LeaveApplicationResponseDto> result =
+                    leaveApplicationService.getCompletedApplicationsByDateRange(
+                            userId, startDate, endDate, pageable
+                    );
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("X-Total-Count", String.valueOf(result.getTotalElements()));
+
+            return new ResponseEntity<>(result, headers, HttpStatus.OK);
+        } catch (Exception e) {
+            log.error("날짜 범위 검색 실패: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * 내 휴가원 날짜 범위 검색
+     */
+    @GetMapping("/my/search")
+    public ResponseEntity<Page<LeaveApplicationResponseDto>> searchMyApplications(
+            Authentication auth,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        String userId = auth.getName();
+        try {
+            int safeSize = Math.max(1, Math.min(size, 100));
+            Pageable pageable = PageRequest.of(Math.max(0, page), safeSize,
+                    Sort.by(Sort.Direction.DESC, "startDate"));
+
+            Page<LeaveApplicationResponseDto> result =
+                    leaveApplicationService.getMyApplicationsByDateRange(
+                            userId, startDate, endDate, pageable
+                    );
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("X-Total-Count", String.valueOf(result.getTotalElements()));
+
+            return new ResponseEntity<>(result, headers, HttpStatus.OK);
+        } catch (Exception e) {
+            log.error("내 휴가원 검색 실패: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * 승인 대기 날짜 범위 검색
+     */
+    @GetMapping("/pending/search")
+    public ResponseEntity<Page<LeaveApplicationResponseDto>> searchPendingApplications(
+            Authentication auth,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        String userId = auth.getName();
+        try {
+            int safeSize = Math.max(1, Math.min(size, 100));
+            Pageable pageable = PageRequest.of(Math.max(0, page), safeSize,
+                    Sort.by(Sort.Direction.DESC, "startDate"));
+
+            Page<LeaveApplicationResponseDto> result =
+                    leaveApplicationService.getPendingApplicationsByDateRange(
+                            userId, startDate, endDate, pageable
+                    );
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("X-Total-Count", String.valueOf(result.getTotalElements()));
+
+            return new ResponseEntity<>(result, headers, HttpStatus.OK);
+        } catch (Exception e) {
+            log.error("승인 대기 검색 실패: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
 }
+

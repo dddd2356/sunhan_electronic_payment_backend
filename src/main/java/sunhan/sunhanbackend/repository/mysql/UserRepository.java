@@ -17,10 +17,7 @@ import sunhan.sunhanbackend.entity.mysql.UserEntity;
 
 import sunhan.sunhanbackend.enums.Role;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Repository
 public interface UserRepository extends JpaRepository<UserEntity, String> {
@@ -57,6 +54,8 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     List<UserEntity> findByDeptCodeAndJobLevel(String deptCode, String jobLevel);
     @Query("select u from UserEntity u left join fetch u.department where u.userId = :userId")
     Optional<UserEntity> findByUserIdWithDepartment(@Param("userId") String userId);
+    @Query("SELECT u FROM UserEntity u LEFT JOIN FETCH u.department WHERE u.userId = :userId")
+    Optional<UserEntity> findByIdWithDepartment(@Param("userId") String userId);
     // 부서장(첫번째) 조회 (캐시) - key를 더 명확하게 수정
     @Cacheable(value = "deptManagerCache", key = "#deptCode + '_' + #jobLevel")
     Optional<UserEntity> findFirstByDeptCodeAndJobLevel(String deptCode, String jobLevel);
@@ -70,6 +69,9 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
      */
     @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds AND u.deptCode != '000'")
     List<UserEntity> findByUserIdIn(@Param("userIds") Collection<String> userIds);
+
+    @Query("SELECT u FROM UserEntity u WHERE u.userId IN :userIds")
+    List<UserEntity> findByUserIdInIncludingAdmin(@Param("userIds") Set<String> userIds);
 
     // 인사팀 직원 조회 (캐시)
     @Cacheable(value = "hrStaffCache", key = "#jobLevel + '_' + #deptCode + '_' + #role")

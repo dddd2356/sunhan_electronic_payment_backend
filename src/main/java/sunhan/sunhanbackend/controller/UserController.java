@@ -171,19 +171,30 @@ public class UserController {
      * 현재 로그인한 사용자의 사인 이미지를 Base64로 반환
      */
     @GetMapping("/me/signature")
-    public ResponseEntity<Map<String, String>> getCurrentUserSignature(Authentication authentication) {
+    public ResponseEntity<Map<String, String>> getCurrentUserSignatureFixed(Authentication authentication) {
         if (authentication == null || !authentication.isAuthenticated()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
         try {
-            String userId = (String) authentication.getPrincipal();
+            String userId = extractUserIdFromAuthentication(authentication);
+            if (userId == null || userId.isBlank()) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "인증 정보를 확인할 수 없습니다."));
+            }
+
             Map<String, String> signatureData = userService.getUserSignatureAsBase64(userId);
+
+            // null이면 빈 맵 반환 (404 대신)
+            if (signatureData == null || signatureData.isEmpty()) {
+                return ResponseEntity.ok(Map.of("signatureUrl", ""));
+            }
+
             return ResponseEntity.ok(signatureData);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("error", e.getMessage()));
+            return ResponseEntity.ok(Map.of("signatureUrl", ""));
         } catch (Exception e) {
+            log.error("현재 사용자 서명 조회 실패", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "서명 이미지를 가져오는 중 오류가 발생했습니다."));
         }

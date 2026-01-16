@@ -16,6 +16,7 @@ import sunhan.sunhanbackend.dto.request.permissions.UpdateJobLevelRequestDto;
 import sunhan.sunhanbackend.dto.response.AdminStatsDto;
 import sunhan.sunhanbackend.dto.response.UserListResponseDto;
 import sunhan.sunhanbackend.dto.response.UserResponseDto;
+import sunhan.sunhanbackend.dto.response.VacationStatusResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
 import sunhan.sunhanbackend.enums.LeaveType;
@@ -26,7 +27,9 @@ import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.service.LeaveApplicationService;
 import sunhan.sunhanbackend.service.PermissionService;
 import sunhan.sunhanbackend.service.UserService;
+import sunhan.sunhanbackend.service.VacationService;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,25 +45,33 @@ public class AdminController {
     private final JwtProvider jwtProvider;  // JwtProvider 변수 선언
     private final PermissionService permissionService;
     private final LeaveApplicationRepository leaveApplicationRepository;
-
+    private final VacationService vacationService;
     @Autowired
-    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider, PermissionService permissionService, LeaveApplicationRepository leaveApplicationRepository) {
+    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider, PermissionService permissionService, LeaveApplicationRepository leaveApplicationRepository, VacationService vacationService) {
         this.userService = userService;
         this.userRepository = userRepository;  // 생성자 주입
         this.jwtProvider = jwtProvider;
         this.permissionService = permissionService;
         this.leaveApplicationRepository = leaveApplicationRepository;
+        this.vacationService = vacationService;
     }
 
     /**
      * 모든 사용자 조회 (휴가 정보 포함)
      */
+    /**
+     * 모든 사용자 조회 (휴가 정보 포함)
+     */
     @GetMapping("/users")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<List<UserResponseDto>> getAllUsers() {
+    public ResponseEntity<List<UserResponseDto>> getAllUsers(
+            @RequestParam(required = false) Integer year
+    ) {
         List<UserEntity> users = userService.findAllUsers();
 
-        // ✅ UserEntity에서 직접 가져오기
+        // ✅ 연도 기본값 설정
+        final Integer targetYear = (year != null) ? year : LocalDate.now().getYear();
+
         List<UserResponseDto> dtos = users.stream().map(u -> {
             UserResponseDto dto = new UserResponseDto();
             dto.setUserId(u.getUserId());
@@ -70,13 +81,21 @@ public class AdminController {
             dto.setRole(u.getRole() == null ? null : u.getRole().toString());
             dto.setUseFlag(u.getUseFlag());
 
-            // ✅ DB에 저장된 값 사용
-            Double totalDays = u.getTotalVacationDays() != null ? u.getTotalVacationDays() : 15.0;
-            Double usedDays = u.getUsedVacationDays() != null ? u.getUsedVacationDays() : 0.0;
-
-            dto.setTotalVacationDays(totalDays);
-            dto.setUsedVacationDays(usedDays);
-            dto.setRemainingVacationDays(totalDays - usedDays);
+            // ✅ VacationService 사용
+            try {
+                VacationStatusResponseDto vacationStatus = vacationService.getVacationStatus(
+                        u.getUserId(),
+                        targetYear
+                );
+                dto.setTotalVacationDays(vacationStatus.getAnnualTotalDays());
+                dto.setUsedVacationDays(vacationStatus.getAnnualUsedDays());
+                dto.setRemainingVacationDays(vacationStatus.getAnnualRemainingDays());
+            } catch (Exception e) {
+                log.warn("연차 정보 조회 실패: userId={}, year={}", u.getUserId(), targetYear, e);
+                dto.setTotalVacationDays(0.0);
+                dto.setUsedVacationDays(0.0);
+                dto.setRemainingVacationDays(0.0);
+            }
 
             return dto;
         }).collect(Collectors.toList());

@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -13,10 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import sunhan.sunhanbackend.dto.response.AdminStatsDto;
-import sunhan.sunhanbackend.dto.response.DepartmentDto;
-import sunhan.sunhanbackend.dto.response.UserListResponseDto;
-import sunhan.sunhanbackend.dto.response.UserResponseDto;
+import sunhan.sunhanbackend.dto.response.*;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
 import sunhan.sunhanbackend.entity.oracle.OracleEntity;
 import sunhan.sunhanbackend.enums.PermissionType;
@@ -47,18 +45,19 @@ public class UserService {
     private final OracleService oracleService;
     private final PasswordEncoder passwdEncoder = new BCryptPasswordEncoder();
     private final PermissionService permissionService;
-
+    private final VacationService vacationService;
     private final DepartmentRepository departmentRepository;
 
     @Value("${file.upload.sign-dir}")
     private String uploadDir;  // "/uploads/signatures/"
 
     @Autowired
-    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService, DepartmentRepository departmentRepository) {
+    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService, DepartmentRepository departmentRepository, @Lazy VacationService vacationService) {
         this.userRepository = userRepository;
         this.oracleService = oracleService;
         this.permissionService = permissionService;
         this.departmentRepository = departmentRepository;
+        this.vacationService = vacationService;
     }
 
     /**
@@ -852,9 +851,18 @@ public class UserService {
                 .collect(Collectors.toList());
         dto.setPermissions(Stream.concat(userPerms.stream(), deptPerms.stream()).distinct().collect(Collectors.toList()));
 
-        dto.setTotalVacationDays(user.getTotalVacationDays());
-        dto.setUsedVacationDays(user.getUsedVacationDays());
-        // dto.setRemainingVacationDays(...); // DTO에 필드 있으면 계산해서 넣기
+        try {
+            VacationStatusResponseDto vacationStatus = vacationService.getVacationStatus(
+                    user.getUserId(),
+                    LocalDate.now().getYear()
+            );
+            dto.setTotalVacationDays(vacationStatus.getAnnualTotalDays());
+            dto.setUsedVacationDays(vacationStatus.getAnnualUsedDays());
+        } catch (Exception e) {
+            log.warn("연차 정보 조회 실패: userId={}", user.getUserId(), e);
+            dto.setTotalVacationDays(0.0);
+            dto.setUsedVacationDays(0.0);
+        }
 
         return dto;
     }

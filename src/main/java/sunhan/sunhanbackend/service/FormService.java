@@ -1,5 +1,6 @@
 package sunhan.sunhanbackend.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -12,14 +13,18 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import sunhan.sunhanbackend.entity.mysql.EmploymentContract;
 import sunhan.sunhanbackend.entity.mysql.LeaveApplication;
+import sunhan.sunhanbackend.entity.mysql.consent.ConsentAgreement;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkSchedule;
 import sunhan.sunhanbackend.entity.mysql.workschedule.WorkScheduleEntry;
 import sunhan.sunhanbackend.enums.ContractType;
 import sunhan.sunhanbackend.enums.Role;
+import sunhan.sunhanbackend.enums.consent.ConsentType;
 import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.repository.mysql.consent.ConsentAgreementRepository;
 import sunhan.sunhanbackend.repository.mysql.workschedule.WorkScheduleRepository;
+import sunhan.sunhanbackend.util.ConsentPdfRenderer;
 import sunhan.sunhanbackend.util.HtmlPdfRenderer;
 import sunhan.sunhanbackend.util.LeaveApplicationPdfRenderer;
 import sunhan.sunhanbackend.util.WorkSchedulePdfRenderer;
@@ -51,12 +56,16 @@ public class FormService {
     private final WorkScheduleRepository workScheduleRepository;
     private final DepartmentRepository departmentRepository;
 
+    private final Path consentUploadDir = uploadsRoot.resolve("consent_agreement");
+    private final ConsentAgreementRepository agreementRepository;
+
     @Autowired
     private ObjectMapper objectMapper;
-    public FormService(UserRepository userRepository, WorkScheduleRepository workScheduleRepository, DepartmentRepository departmentRepository, ObjectMapper objectMapper) {
+    public FormService(UserRepository userRepository, WorkScheduleRepository workScheduleRepository, DepartmentRepository departmentRepository, ConsentAgreementRepository agreementRepository, ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.workScheduleRepository = workScheduleRepository;
         this.departmentRepository = departmentRepository;
+        this.agreementRepository = agreementRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -78,6 +87,10 @@ public class FormService {
             if (Files.notExists(workScheduleUploadDir)) {
                 Files.createDirectories(workScheduleUploadDir);
                 log.info("Created work schedule upload dir: {}", workScheduleUploadDir);
+            }
+            if (Files.notExists(consentUploadDir)) {
+                Files.createDirectories(consentUploadDir);
+                log.info("Created consent upload dir: {}", consentUploadDir);
             }
         } catch (IOException e) {
             log.error("Failed to create upload directories", e);
@@ -722,5 +735,343 @@ public class FormService {
             log.error("WorkSchedule PDF 생성/저장 실패: id={}, err={}", schedule.getId(), e.getMessage(), e);
             throw new RuntimeException("근무표 PDF 생성 실패", e);
         }
+    }
+
+    /**
+     * ✅ 추가: 동의서 PDF 생성
+     */
+    public String generateConsentPdf(ConsentAgreement agreement) {
+        try {
+            log.info("동의서 PDF 생성 시작: agreementId={}", agreement.getId());
+
+            byte[] pdfBytes = getConsentPdfBytes(agreement);
+
+            // 파일명 생성
+            String fileName = "consent_" + agreement.getId() + "_" + System.currentTimeMillis() + ".pdf";
+
+            // PDF 저장
+            String filePath = savePdfToStorage(pdfBytes, fileName);
+
+            log.info("동의서 PDF 생성 완료: {}", filePath);
+            return filePath;
+
+        } catch (Exception e) {
+            log.error("동의서 PDF 생성 실패: id={}", agreement.getId(), e);
+            throw new RuntimeException("PDF 생성 중 오류가 발생했습니다.", e);
+        }
+    }
+
+    /**
+     * ✅ 추가: 개인정보 동의서 필드 치환
+     */
+    private String replacePrivacyPolicyFields(String html, Map<String, Object> formData) {
+        return html
+                .replace("{{essentialInfoAgree}}",
+                        "agree".equals(formData.get("essentialInfoAgree")) ? "☑ 동의함    ☐ 동의하지 않음" : "☐ 동의함    ☑ 동의하지 않음")
+                .replace("{{optionalInfoAgree}}",
+                        "agree".equals(formData.get("optionalInfoAgree")) ? "☑ 동의함    ☐ 동의하지 않음" : "☐ 동의함    ☑ 동의하지 않음")
+                .replace("{{uniqueIdAgree}}",
+                        "agree".equals(formData.get("uniqueIdAgree")) ? "☑ 동의함    ☐ 동의하지 않음" : "☐ 동의함    ☑ 동의하지 않음")
+                .replace("{{sensitiveInfoAgree}}",
+                        "agree".equals(formData.get("sensitiveInfoAgree")) ? "☑ 동의함    ☐ 동의하지 않음" : "☐ 동의함    ☑ 동의하지 않음");
+    }
+
+    /**
+     * ✅ 추가: 의료정보 보호 서약서 필드 치환
+     */
+    private String replaceMedicalInfoFields(String html, Map<String, Object> formData) {
+        String jobType = (String) formData.getOrDefault("jobType", "");
+
+        // 직종 체크박스 치환
+        html = html
+                .replace("{{jobType_doctor}}", "의사".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_nurse}}", "간호사".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_nurseAide}}", "간호조무사".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_admin}}", "행정직".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_pharmacist}}", "약사".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_nutritionist}}", "영양사".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_medTech}}", "의료기사직".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_facility}}", "시설관리직".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_reception}}", "원무직".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_it}}", "전산직".equals(jobType) ? "☑" : "☐")
+                .replace("{{jobType_other}}", "기타직종".equals(jobType) ? "☑" : "☐");
+
+        // 기타 정보
+        html = html
+                .replace("{{residentNumber}}", (String) formData.getOrDefault("residentNumber", ""))
+                .replace("{{email}}", (String) formData.getOrDefault("email", ""));
+
+        return html;
+    }
+
+    /**
+     * ✅ 추가: 서명 이미지 렌더링
+     */
+    private String renderSignatureImage(String signatureDataUrl) {
+        if (signatureDataUrl == null || signatureDataUrl.isEmpty()) {
+            return "";
+        }
+        // Base64 이미지를 HTML img 태그로 변환
+        return "<img src=\"" + signatureDataUrl + "\" style=\"max-width:200px;max-height:80px;border:1px solid #ccc;\" />";
+    }
+
+    /**
+     * ✅ 추가: PDF 파일 저장
+     */
+    private String savePdfToStorage(byte[] pdfBytes, String fileName) {
+        try {
+            // ✅ consentUploadDir 사용 (이미 클래스 상단에 선언되어 있음)
+            Path uploadPath = consentUploadDir;
+
+            if (!Files.exists(uploadPath)) {
+                Files.createDirectories(uploadPath);
+            }
+
+            Path filePath = uploadPath.resolve(fileName);
+            Files.write(filePath, pdfBytes);
+
+            return "/uploads/consent_agreement/" + fileName;
+
+        } catch (Exception e) {
+            log.error("PDF 파일 저장 실패", e);
+            throw new RuntimeException("파일 저장 실패", e);
+        }
+    }
+
+    /**
+     * ✅ 개선된 동의서 PDF 바이트 생성
+     * - formData/signature 중첩 구조 완벽 지원
+     * - 체크박스 특수문자(☑/☐) 치환
+     * - 서명 이미지 Base64 → <img> 태그 변환
+     */
+    private byte[] getConsentPdfBytes(ConsentAgreement agreement) throws IOException {
+        try {
+            String htmlTemplate = agreement.getConsentForm().getContent();
+            UserEntity targetUser = userRepository.findByUserId(agreement.getTargetUserId())
+                    .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+
+            Map<String, String> extraData = agreement.getExtraData();
+
+            String html = htmlTemplate;
+            html = html.replace("{{userName}}", extraData.getOrDefault("userName", targetUser.getUserName()));
+            html = html.replace("{{userId}}", extraData.getOrDefault("userId", agreement.getTargetUserId()));
+            html = html.replace("{{phone}}", extraData.getOrDefault("phone", targetUser.getPhone() != null ? targetUser.getPhone() : ""));
+            html = html.replace("{{deptName}}", extraData.getOrDefault("deptName", agreement.getDeptName() != null ? agreement.getDeptName() : ""));
+
+            LocalDate now = LocalDate.now();
+            String koreanDate = String.format("%d년 %d월 %d일", now.getYear(), now.getMonthValue(), now.getDayOfMonth());
+            html = html.replace("{{date}}", koreanDate);
+
+            // ✅ 작성 완료 시 formDataJson에서 추가 데이터 치환
+            if (agreement.getFormDataJson() != null && !agreement.getFormDataJson().isBlank()) {
+                JsonNode formDataRoot = objectMapper.readTree(agreement.getFormDataJson());
+                JsonNode formData = formDataRoot.has("formData") ? formDataRoot.get("formData") : formDataRoot;
+
+                // ✅ 체크박스 치환 (가장 중요!)
+                html = replaceConsentCheckboxes(html, formData);
+
+                // ✅ 입력 필드 치환
+                html = replaceInputFields(html, formData);
+
+                // ✅ 서명 이미지 치환
+                String signatureImageUrl = null;
+                if (formDataRoot.has("signature") && !formDataRoot.get("signature").asText().isEmpty()) {
+                    signatureImageUrl = formDataRoot.get("signature").asText();
+                } else if (formData.has("signature") && !formData.get("signature").asText().isEmpty()) {
+                    signatureImageUrl = formData.get("signature").asText();
+                }
+
+                if (signatureImageUrl != null && !signatureImageUrl.isEmpty()) {
+                    String signatureHtml = String.format(
+                            "<img src='%s' style='max-width: 100px; max-height: 40px; vertical-align: middle;' alt='서명' />",
+                            signatureImageUrl
+                    );
+                    html = html.replace("{{signature}}", signatureHtml);
+                } else {
+                    html = html.replace("{{signature}}", "(서명)");
+                }
+
+                if (formData.has("agreementDate") && !formData.get("agreementDate").asText().isEmpty()) {
+                    String userDate = formData.get("agreementDate").asText();
+                    try {
+                        LocalDate parsedDate = LocalDate.parse(userDate);
+                        String koreanUserDate = String.format("%d년 %d월 %d일",
+                                parsedDate.getYear(), parsedDate.getMonthValue(), parsedDate.getDayOfMonth());
+                        html = html.replace("{{date}}", koreanUserDate);
+                    } catch (Exception e) {
+                        log.warn("날짜 파싱 실패, 기본값 유지: {}", userDate);
+                    }
+                }
+            } else {
+                html = html.replace("{{signature}}", "(서명)");
+            }
+
+            log.info("동의서 PDF 생성 시작: id={}, type={}", agreement.getId(), agreement.getType());
+            return ConsentPdfRenderer.render(html);
+
+        } catch (Exception e) {
+            log.error("동의서 PDF 바이트 생성 실패: id={}", agreement.getId(), e);
+            throw new IOException("PDF 생성 실패", e);
+        }
+    }
+
+    /**
+     * ✅ 의료정보 서약서 정보 테이블 생성
+     */
+    private String buildMedicalInfoTable(JsonNode formData, UserEntity user, ConsentAgreement agreement) {
+        String jobType = formData.has("jobType") ? formData.get("jobType").asText() : "";
+        String residentNumber = formData.has("residentNumber") ? formData.get("residentNumber").asText() : "";
+        String email = formData.has("email") ? formData.get("email").asText() : "";
+
+        return String.format(
+                "<div style='margin-top: 30px; padding: 20px; background: #f9fafb; border-radius: 8px;'>" +
+                        "<h3 style='margin: 0 0 15px 0; color: #1f2937;'>작성자 정보</h3>" +
+                        "<table border='1' style='width: 100%%; border-collapse: collapse;'>" +
+                        "<tbody>" +
+                        "<tr>" +
+                        "<td style='padding: 10px; background-color: #f0f0f0; width: 25%%;'>직종</td>" +
+                        "<td style='padding: 10px; width: 25%%;'>%s</td>" +
+                        "<td style='padding: 10px; background-color: #f0f0f0; width: 25%%;'>소속부서</td>" +
+                        "<td style='padding: 10px; width: 25%%;'>%s</td>" +
+                        "</tr>" +
+                        "<tr>" +
+                        "<td style='padding: 10px; background-color: #f0f0f0;'>사원번호</td>" +
+                        "<td style='padding: 10px;'>%s</td>" +
+                        "<td style='padding: 10px; background-color: #f0f0f0;'>성명</td>" +
+                        "<td style='padding: 10px;'>%s</td>" +
+                        "</tr>" +
+                        "<tr>" +
+                        "<td style='padding: 10px; background-color: #f0f0f0;'>주민등록번호</td>" +
+                        "<td style='padding: 10px;'>%s</td>" +
+                        "<td style='padding: 10px; background-color: #f0f0f0;'>연락처</td>" +
+                        "<td style='padding: 10px;'>%s</td>" +
+                        "</tr>" +
+                        "<tr>" +
+                        "<td style='padding: 10px; background-color: #f0f0f0;'>이메일</td>" +
+                        "<td style='padding: 10px;' colspan='3'>%s</td>" +
+                        "</tr>" +
+                        "</tbody>" +
+                        "</table>" +
+                        "</div>",
+                jobType,
+                agreement.getDeptName() != null ? agreement.getDeptName() : "",
+                user.getUserId(),
+                user.getUserName(),
+                residentNumber,
+                user.getPhone() != null ? user.getPhone() : "",
+                email
+        );
+    }
+
+
+    /**
+     * ✅ 개인정보 동의서 체크박스 치환 로직
+     * - PDF에서 렌더링 가능한 일반 텍스트 사용
+     */
+    private String replaceConsentCheckboxes(String html, JsonNode formData) {
+        // 개인정보 동의서 체크박스
+        String[] checkboxFields = {
+                "essentialInfoAgree",
+                "optionalInfoAgree",
+                "uniqueIdAgree",
+                "sensitiveInfoAgree"
+        };
+
+        for (String field : checkboxFields) {
+            String value = formData.has(field) ? formData.get(field).asText() : "";
+            String replacement;
+
+            if ("agree".equals(value)) {
+                replacement = "[V] 동의함    [ ] 동의하지 않음";
+            } else if ("disagree".equals(value)) {
+                replacement = "[ ] 동의함    [V] 동의하지 않음";
+            } else {
+                replacement = "";
+            }
+
+            html = html.replace("{{" + field + "}}", replacement);
+        }
+
+        // ✅ 의료정보 서약서 직종 체크박스 - 수정
+        if (formData.has("jobType")) {
+            String jobType = formData.get("jobType").asText();
+
+            String[] jobLabels = {
+                    "의사", "간호사", "간호조무사", "행정직", "약사",
+                    "영양사", "의료기사직", "시설관리직", "원무직", "전산직", "기타직종"
+            };
+
+            StringBuilder jobTypeHtml = new StringBuilder();
+            for (int i = 0; i < jobLabels.length; i++) {
+                String marker = jobLabels[i].equals(jobType) ? "[V]" : "[ ]";
+                jobTypeHtml.append(marker).append(" ").append(jobLabels[i]);
+
+                if (i < jobLabels.length - 1) {
+                    jobTypeHtml.append("   ");
+                }
+            }
+
+            // ✅ 첫 번째 변수에 전체 직종 HTML 삽입
+            html = html.replace("{{jobType_doctor}}", jobTypeHtml.toString());
+
+            // ✅ 나머지 변수들은 빈 문자열로 (doctor 제외하고 시작)
+            String[] jobTypes = {
+                    "nurse", "nurseAide", "admin", "pharmacist",
+                    "nutritionist", "medTech", "facility", "reception", "it", "other"
+            };
+
+            for (String jobTypeVar : jobTypes) {
+                html = html.replace("{{jobType_" + jobTypeVar + "}}", "");
+            }
+
+        } else {
+            // 작성 전 상태 - 모든 변수를 빈 문자열로
+            String[] jobTypes = {
+                    "doctor", "nurse", "nurseAide", "admin", "pharmacist",
+                    "nutritionist", "medTech", "facility", "reception", "it", "other"
+            };
+
+            for (String jobTypeVar : jobTypes) {
+                html = html.replace("{{jobType_" + jobTypeVar + "}}", "");
+            }
+        }
+
+        return html;
+    }
+
+    /**
+     * 개별 체크박스 치환
+     */
+    private String replaceCheckbox(String html, String fieldName, JsonNode formData) {
+        boolean isChecked = formData.has(fieldName) && formData.get(fieldName).asBoolean();
+        String checkedAttr = isChecked ? " checked" : "";
+        html = html.replace("name=\"" + fieldName + "\"",
+                "name=\"" + fieldName + "\"" + checkedAttr);
+        return html;
+    }
+
+    /**
+     * ✅ 입력 필드 데이터를 HTML에 반영
+     */
+    private String replaceInputFields(String html, JsonNode formData) {
+        // 주민등록번호
+        if (formData.has("residentNumber")) {
+            String residentNumber = formData.get("residentNumber").asText();
+            html = html.replace("{{residentNumber}}", residentNumber);
+        }
+
+        // 이메일
+        if (formData.has("email")) {
+            String email = formData.get("email").asText();
+            html = html.replace("{{email}}", email);
+        }
+
+        // 직종 (텍스트로 표시하는 경우)
+        if (formData.has("jobType")) {
+            String jobType = formData.get("jobType").asText();
+            html = html.replace("{{jobType}}", jobType);
+        }
+
+        return html;
     }
 }
