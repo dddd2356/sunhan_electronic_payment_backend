@@ -2,7 +2,7 @@
 
 ## 📖 소개
 
-선한병원 전자 결재 시스템의 서버 애플리케이션입니다. 사용자 인증, 데이터베이스 연동, 근로계약서 및 휴가원의 결재 로직 처리를 위한 API를 제공합니다.
+선한병원 전자 결재 시스템의 서버 애플리케이션입니다. 사용자 인증, 데이터베이스 연동, 근로계약서 및 휴가원, 근무현황표 동적 결재 라인 시스템을 제공합니다.
 
 ---
 
@@ -17,6 +17,93 @@
 -   **Authentication**: Session/Cookie 또는 JWT 기반 인증
 
 ---
+
+## 📐 시스템 아키텍처
+
+```mermaid
+flowchart LR
+
+%% ===== Client =====
+subgraph Client [💻 Client Side]
+  direction TB
+  Browser[Web Browser]
+  Frontend[⚛️ React Frontend]
+  Browser --> Frontend
+end
+
+%% ===== External API =====
+subgraph External [🌐 External APIs]
+  direction TB
+  AddressAPI[📮 Address Search API]
+  HolidayAPI[📅 Public Data Portal API]
+end
+
+%% ===== Server =====
+subgraph Server [⚙️ Application Server]
+  direction TB
+  
+  subgraph SpringBoot [🍃 Spring Boot Backend]
+    direction TB
+    
+    %% Domain Services Group
+    subgraph Domain [📦 Domain Services]
+        direction TB
+        Auth[🔐 Auth / User Profile]
+        Contract[📄 Contract Mgmt]
+        Approval[🔁 Approval System]
+        Leave[🌴 Leave Application]
+        Schedule[🕒 Work Schedule]
+        Admin[🛠️ Admin / Sync Logic]
+    end
+  end
+end
+
+%% ===== Database =====
+subgraph Database [💾 Persistence Layer]
+  direction TB
+  MariaDB[(🐬 MariaDB)]
+  Oracle[(🗄️ Oracle HR Legacy)]
+end
+
+%% ===== Wiring / Logic Flow =====
+
+%% 1. User Interaction & Address Search
+Frontend -- API Call (Address Search) --> AddressAPI
+Frontend -- HTTPS / JSON --> SpringBoot
+
+%% 2. Backend to Domain Routing (Conceptual)
+SpringBoot --> Auth
+SpringBoot --> Contract
+SpringBoot --> Approval
+SpringBoot --> Leave
+SpringBoot --> Schedule
+SpringBoot --> Admin
+
+%% 3. Domain Logic & DB Connections
+
+%% (A) Login & Profile Logic
+%% 로그인 시: MariaDB확인 -> 없으면 Oracle 확인
+Auth -- Read/Write --> MariaDB
+Auth -- Read (Initial Check) --> Oracle 
+
+%% (B) Contract Logic
+%% 계약서 작성 시: 프로필 정보는 MariaDB에서 가져옴 (AddressAPI 직접 호출 X)
+Contract -- Read/Write --> MariaDB
+
+%% (C) Schedule Logic
+%% 근무표 생성 시: 공휴일 API 호출 + DB 저장
+Schedule -- Fetch Holidays --> HolidayAPI
+Schedule -- Read/Write --> MariaDB
+
+%% (D) Other Domains
+Approval --> MariaDB
+Leave --> MariaDB
+Admin --> MariaDB
+
+%% (E) Data Sync (Batch)
+%% 새벽 2시 동기화: Oracle -> MariaDB
+Admin -. Daily Sync (2:00 AM) .-> Oracle
+```
 
 ## 🔗 API 명세
 
@@ -59,6 +146,24 @@
     -  `GET /api/v1/leave-application/substitutes` : 대리 근무자 목록을 조회합니다.
     -  `GET /api/v1/leave-application/approvals` : 승인 대기 중인 문서 목록을 조회합니다.
     -  `DELETE /api/v1/leave-application/{id}` : 특정 휴가 신청서를 삭제합니다.
+ 
+-   **근무표 관리
+    -   `GET /api/v1/work-schedule` : 근무표 목록 조회 (년/월/부서 필터링).
+    -   `POST /api/v1/work-schedule` : 새 근무표 생성.
+    -   `GET /api/v1/work-schedule/{scheduleId}` : 근무표 상세 정보 조회.
+    -   `POST /api/v1/work-schedule/{scheduleId}/entries` : 근무표 상세 내용(직원별 근무) 일괄 저장.
+    -   `PUT /api/v1/work-schedule/{scheduleId}/status` : 근무표 상태 변경 (작성중, 승인대기 등).
+    -   `GET /api/v1/work-schedule/my-draft` : 내가 작성 중인 임시 저장 문서 조회.
+    -   `GET /api/v1/work-schedule/entries/department` : 부서별 월간 근무 현황 데이터 조회.
+    -   `GET /api/v1/dept-duty-config/schedule/{scheduleId}` : 해당 근무표의 당직/근무 모드 설정 조회.
+    -   `POST /api/v1/dept-duty-config` : 근무표 관련 설정 저장 (초안 상태일 때만 가능).
+
+-   **결재 라인 관리
+    -   `POST /api/v1/approval-lines` : 결재 라인 생성 및 승인 요청.
+    -   `GET /api/v1/approval-lines/candidates` : 결재 승인자 후보 목록 조회 (팀장, 부서장 등).
+    -   `GET /api/v1/approval-lines/document/{documentType}/{documentId}` : 특정 문서의 결재 진행 상황 조회.
+    -   `PUT /api/v1/approval-lines/{lineId}/approve` : 결재 승인 처리.
+    -   `PUT /api/v1/approval-lines/{lineId}/reject` : 결재 반려 처리.
 
 -   **문서 관리**
     - `GET /api/v1/user/reports/documents` : 문서 현황 보고서를 조회하며, 상태별 문서 개수를 반환합니다.
