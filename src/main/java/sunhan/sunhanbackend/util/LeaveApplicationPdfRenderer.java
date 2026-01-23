@@ -72,7 +72,7 @@ public class LeaveApplicationPdfRenderer {
         String result = switch (jobLevel) {
             case 0 -> "사원";
             case 1 -> "부서장";
-            case 2 -> "진료지원센터장";
+            case 2 -> "센터장";
             case 3 -> "원장";
             case 4 -> "행정원장";
             case 5 -> "대표원장";
@@ -430,7 +430,7 @@ public class LeaveApplicationPdfRenderer {
         html.append("<td class='header-approval-cell'>");
         html.append("<div class='table-container'>");
         html.append("<table class='approval-table'><tbody>");
-        html.append("<tr><th class='approval-header-cell' rowspan='4'>결<br/>재</th><th class='position-header-cell' rowspan='2'>인사담당</th><th class='position-header-cell' rowspan='2'>진료지원<br/>센터장</th><th class='approval-group-header' colspan='2'>승인</th></tr>");
+        html.append("<tr><th class='approval-header-cell' rowspan='4'>결<br/>재</th><th class='position-header-cell' rowspan='2'>인사담당</th><th class='position-header-cell' rowspan='2'>센터장</th><th class='approval-group-header' colspan='2'>승인</th></tr>");
         html.append("<tr><th class='position-header-cell'>행정원장</th><th class='position-header-cell'>대표원장</th></tr>");
 
         html.append("<tr>");

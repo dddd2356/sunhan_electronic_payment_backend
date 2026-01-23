@@ -86,9 +86,19 @@ public class UserController {
     }
 
     @PutMapping("/update-profile/{userId}")
-    public ResponseEntity<?> updateProfile(@PathVariable String userId,
-                                           @RequestBody UpdateProfileRequestDto requestDto) {
+    public ResponseEntity<?> updateProfile(
+            @PathVariable String userId,
+            @RequestBody UpdateProfileRequestDto requestDto,
+            Authentication authentication
+    ) {
         try {
+            // ✅ 본인 확인 로직 추가
+            String authenticatedUserId = extractUserIdFromAuthentication(authentication);
+            if (!userId.equals(authenticatedUserId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "본인의 정보만 수정할 수 있습니다."));
+            }
+
             // 사용자 인증/인가 로직 (예: JWT 토큰에서 userId를 가져와 경로 변수 userId와 일치하는지 확인)
             UserEntity updatedUser = userService.updateProfile(
                     userId,
@@ -113,14 +123,26 @@ public class UserController {
     }
 
     @PostMapping("/{userId}/signature")
-    public ResponseEntity<Void> uploadSignature(
+    public ResponseEntity<?> uploadSignature(
             @PathVariable String userId,
-            @RequestParam("file") MultipartFile file
-    ) throws IOException {
-        userService.uploadSignature(userId, file);
-        return ResponseEntity.ok().build();
+            @RequestParam(value = "file", required = false) MultipartFile file
+    ) {
+        try {
+            userService.uploadSignature(userId, file);
+            return ResponseEntity.ok().build();
+        } catch (IllegalArgumentException e) {
+            log.warn("서명 업로드 유효성 검사 실패: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (IOException e) {
+            log.error("서명 파일 저장 실패", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "파일 저장 중 오류가 발생했습니다."));
+        } catch (Exception e) {
+            log.error("서명 업로드 예기치 않은 오류", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "서버 내부 오류"));
+        }
     }
-
     /**
      * 사용자의 사인 이미지를 Base64 데이터 URL 형식으로 반환
      */
@@ -420,6 +442,45 @@ public class UserController {
 
         } catch (Exception e) {
             log.error("전체 부서 조회 실패: deptCode={}", deptCode, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 사용자 검색 (이름 또는 ID)
+     */
+    @GetMapping("/search")
+    public ResponseEntity<?> searchUsers(
+            @RequestParam String query,
+            Authentication authentication
+    ) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            if (query == null || query.trim().length() < 2) {
+                return ResponseEntity.ok(Collections.emptyList()); // ✅ 빈 배열 반환
+            }
+
+            List<UserEntity> users = userService.searchUsers(query);
+
+            List<Map<String, Object>> response = users.stream()
+                    .map(u -> {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("userId", u.getUserId());
+                        map.put("userName", u.getUserName());
+                        map.put("jobLevel", u.getJobLevel());
+                        map.put("deptCode", u.getDeptCode());
+                        map.put("phone", u.getPhone());
+                        return map;
+                    })
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(response); // ✅ List 형태로 반환
+        } catch (Exception e) {
+            log.error("사용자 검색 실패: query={}", query, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", e.getMessage()));
         }

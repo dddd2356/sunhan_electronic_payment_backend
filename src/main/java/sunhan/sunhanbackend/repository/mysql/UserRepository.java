@@ -25,10 +25,13 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     @Cacheable(value = "userCache", key = "#userId", condition = "#userId != null && !#userId.isEmpty()")
     Optional<UserEntity> findByUserId(String userId);
     // department를 함께 로드하는 안전한 조회 (엔티티그래프)
-
     @EntityGraph(attributePaths = {"department"})
     @Query("SELECT u FROM UserEntity u WHERE u.userId = :userId")
     Optional<UserEntity> findWithDeptByUserId(@Param("userId") String userId);
+
+    // ✅ 추가: 캐시 우회 조회 메서드
+    @Query("SELECT u FROM UserEntity u WHERE u.userId = :userId")
+    Optional<UserEntity> findByUserIdNoCache(@Param("userId") String userId);
 
     // N+1 완화용: 여러 userId를 한 번에 가져올 때 department도 함께 로드
     @EntityGraph(attributePaths = {"department"})
@@ -189,4 +192,14 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
             @Param("searchTerm") String searchTerm,
             Pageable pageable
     );
+    /**
+     * 사용자 검색 (이름 또는 ID) - 간단한 버전
+     */
+    @Query("SELECT u FROM UserEntity u WHERE " +
+            "u.useFlag = '1' AND " +
+            "u.deptCode != '000' AND " +
+            "u.jobType != '1' AND " +
+            "(LOWER(u.userId) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+            "LOWER(u.userName) LIKE LOWER(CONCAT('%', :query, '%')))")
+    List<UserEntity> searchUsers(@Param("query") String query);
 }

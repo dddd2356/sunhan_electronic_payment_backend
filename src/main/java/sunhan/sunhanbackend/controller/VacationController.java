@@ -425,7 +425,7 @@ public class VacationController {
         switch (jobLevel) {
             case "0": return "사원";
             case "1": return "부서장";
-            case "2": return "진료센터장";
+            case "2": return "센터장";
             case "3": return "원장";
             case "4": return "행정원장";
             case "5": return "대표원장";

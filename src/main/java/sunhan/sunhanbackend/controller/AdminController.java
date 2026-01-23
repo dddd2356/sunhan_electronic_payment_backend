@@ -8,7 +8,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
+import sunhan.sunhanbackend.dto.request.ResetPasswordRequest;
 import sunhan.sunhanbackend.dto.request.UpdateUserFlagRequestDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByConditionDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByUserIdDto;
@@ -46,14 +49,16 @@ public class AdminController {
     private final PermissionService permissionService;
     private final LeaveApplicationRepository leaveApplicationRepository;
     private final VacationService vacationService;
+    private final PasswordEncoder passwordEncoder;
     @Autowired
-    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider, PermissionService permissionService, LeaveApplicationRepository leaveApplicationRepository, VacationService vacationService) {
+    public AdminController(UserService userService, UserRepository userRepository, JwtProvider jwtProvider, PermissionService permissionService, LeaveApplicationRepository leaveApplicationRepository, VacationService vacationService, PasswordEncoder passwordEncoder) {
         this.userService = userService;
         this.userRepository = userRepository;  // 생성자 주입
         this.jwtProvider = jwtProvider;
         this.permissionService = permissionService;
         this.leaveApplicationRepository = leaveApplicationRepository;
         this.vacationService = vacationService;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /**
@@ -524,6 +529,48 @@ public class AdminController {
         } catch (Exception e) {
             log.error("통계 데이터 조회 오류: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    @PostMapping("/reset-user-password")
+    @PreAuthorize("hasRole('ADMIN')") // ✅ 추가 (보안 강화)
+    public ResponseEntity<?> resetUserPassword(
+            @RequestBody ResetPasswordRequest request,
+            Authentication authentication
+    ) {
+        try {
+            // ✅ Authentication에서 userId 추출
+            String adminUserId = (String) authentication.getPrincipal();
+
+            UserEntity admin = userRepository.findByUserId(adminUserId)
+                    .orElseThrow(() -> new IllegalArgumentException("관리자를 찾을 수 없습니다."));
+
+            int adminLevel = Integer.parseInt(admin.getJobLevel());
+            if (adminLevel != 6) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "최고관리자(jobLevel 6)만 비밀번호를 변경할 수 있습니다."));
+            }
+
+            UserEntity targetUser = userRepository.findByUserId(request.getTargetUserId())
+                    .orElseThrow(() -> new IllegalArgumentException("대상 사용자를 찾을 수 없습니다."));
+
+            // 비밀번호 변경
+            targetUser.setPasswd(passwordEncoder.encode(request.getNewPassword()));
+            targetUser.setPasswordChangeRequired(true);
+            userRepository.save(targetUser);
+
+            log.info("최고관리자 {}가 사용자 {}의 비밀번호를 변경함",
+                    admin.getUserId(), targetUser.getUserId());
+
+            return ResponseEntity.ok(Map.of("message", "비밀번호가 변경되었습니다."));
+
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "잘못된 jobLevel 형식입니다."));
+        } catch (Exception e) {
+            log.error("비밀번호 변경 실패", e);
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", e.getMessage()));
         }
     }
 }

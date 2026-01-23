@@ -14,13 +14,18 @@ public class ContractFormData {
     public String contractTitle;
     public String employerName, employerAddress, employerPhone;
     public String employeeName, employeeAddress, employeePhone, employeeSSN;
-    public String startDate, workTime, contractDate, salaryContractDate;
-    public String breakTime, totalAnnualSalary, basicSalary, positionAllowance;
+    public String startDate, contractDate, conditionApplyDate, salaryContractDate;
+    public List<String> workTimeList;
+    public List<String> breakTimeList;
+    public String workingHours;
+    public String salaryMonths;
+    public String totalAnnualSalary, basicSalary, positionAllowance;
     public String licenseAllowance, hazardPay, treatmentImprovementExpenses;
     public String adjustmentAllowance, overtimePay;
     public String nDutyAllowance, regularHourlyWage, employmentOccupation;
     public String dutyNight, receiptConfirmation1, receiptConfirmation2;
     public String writtenDate, employeeSignatureUrl;
+    public String contractSignDate;
     //제 5조 설명필요한 부분
     private String overtime;             // 라벨
     private String nDuty;                // 라벨

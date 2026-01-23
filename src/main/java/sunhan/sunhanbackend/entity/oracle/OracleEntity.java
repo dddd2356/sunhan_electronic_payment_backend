@@ -15,22 +15,22 @@ import lombok.Setter;
 @NoArgsConstructor //매개변수 없는 생성자 자동으로 만들어줌
 @AllArgsConstructor //모든 필드에 대해서 받아오는 생성자 만들어줌
 @Entity  // "user" 테이블과 매핑되는 엔티티 클래스
-@Table(name="USRMST")  // 테이블 이름 지정
+@Table(name="USR_MST")  // 테이블 이름 지정
 public class OracleEntity {
     @Id
     @Column(name = "USRID", nullable = false, unique = true)
     private String usrId;
 
-    @Column(name = "USRKORNAME")
+    @Column(name = "USRKORNM")
     private String usrKorName;
 
-    @Column(name = "DEPTCODE")
+    @Column(name = "DEPTCD")
     private String deptCode;
 
     @Column(name="JOBTYPE")
     private String jobType;
 
-    @Column(name="USEFLAG")
+    @Column(name="USEFLG")
     private String useFlag;
 
     @Column(name="STARTDT")

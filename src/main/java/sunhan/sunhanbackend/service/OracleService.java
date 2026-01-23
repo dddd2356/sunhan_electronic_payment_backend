@@ -37,7 +37,9 @@ public class OracleService {
 
     /**
      * Oracle에서 사용자 정보를 가져와서 MySQL에 저장하는 메서드
+     * ✅ MySQL 트랜잭션 (저장 대상이 MySQL이므로)
      */
+    @Transactional // ✅ 기본 MySQL 트랜잭션 매니저 사용
     public UserEntity migrateUserFromOracle(String usrId, String password) {
         if ("administrator".equalsIgnoreCase(usrId)) {
             log.info("administrator 사용자는 Oracle에서 마이그레이션되지 않습니다.");
@@ -45,6 +47,14 @@ public class OracleService {
         }
 
         try {
+            // ✅ 1. 먼저 MySQL에 이미 있는지 확인
+            Optional<UserEntity> existingUserOpt = userRepository.findByUserId(usrId);
+            if (existingUserOpt.isPresent()) {
+                log.info("✅ 사용자가 이미 MySQL에 존재합니다: {}", usrId);
+                return existingUserOpt.get();
+            }
+
+            // ✅ 2. Oracle 조회 (읽기 전용)
             OracleEntity oracleUser = getOracleUserInfo(usrId);
 
             if (!"1".equals(oracleUser.getUseFlag())) {
@@ -52,12 +62,7 @@ public class OracleService {
                 throw new RuntimeException("비활성 상태의 사용자입니다.");
             }
 
-            Optional<UserEntity> existingUserOpt = userRepository.findByUserId(usrId);
-            if (existingUserOpt.isPresent()) {
-                log.info("사용자가 이미 MySQL에 존재합니다: {}", usrId);
-                return existingUserOpt.get();
-            }
-
+            // ✅ 3. 새 사용자 엔티티 생성
             UserEntity newUser = new UserEntity();
             newUser.setUserId(oracleUser.getUsrId());
             newUser.setUserName(oracleUser.getUsrKorName());
@@ -66,7 +71,6 @@ public class OracleService {
             newUser.setDeptCode(oracleUser.getDeptCode());
             newUser.setUseFlag(oracleUser.getUseFlag());
 
-            // ✅ Oracle의 String 날짜를 LocalDate로 변환하여 저장
             LocalDate startDate = DateUtil.parseOracleDate(oracleUser.getStartDate());
             newUser.setStartDate(startDate);
 
@@ -76,7 +80,7 @@ public class OracleService {
                 log.warn("입사일자를 파싱할 수 없습니다: {}", oracleUser.getStartDate());
             }
 
-            // jobType에 따라 jobLevel 설정
+            // JobLevel 설정
             if ("0".equals(oracleUser.getJobType())) {
                 newUser.setJobLevel("0");
             } else if ("1".equals(oracleUser.getJobType())) {
@@ -87,7 +91,7 @@ public class OracleService {
                 newUser.setJobLevel("0");
             }
 
-            // JobLevel에 따라 Role 자동 설정
+            // Role 설정
             try {
                 int jobLevelInt = Integer.parseInt(newUser.getJobLevel());
                 if (jobLevelInt >= 2) {
@@ -102,14 +106,24 @@ public class OracleService {
                 log.warn("JobLevel 파싱 실패, USER 권한으로 설정: {}", usrId);
             }
 
-            UserEntity savedUser = userRepository.save(newUser);
-            log.info("Oracle에서 MySQL로 사용자 정보 이전 완료: {} (Role: {}, StartDate: {})",
+            // ✅ 4. 저장 전 마지막 중복 체크 (동시성 대비)
+            if (userRepository.existsById(usrId)) {
+                log.warn("⚠️ 저장 직전 중복 감지: {}", usrId);
+                return userRepository.findByUserId(usrId).get();
+            }
+
+            UserEntity savedUser = userRepository.saveAndFlush(newUser); // ✅ flush 추가
+            log.info("✅ Oracle에서 MySQL로 사용자 정보 이전 완료: {} (Role: {}, StartDate: {})",
                     usrId, savedUser.getRole(), savedUser.getStartDate());
 
             return savedUser;
 
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            log.error("❌ 중복 키 오류 발생: {}. 기존 데이터 반환합니다.", usrId);
+            return userRepository.findByUserId(usrId)
+                    .orElseThrow(() -> new RuntimeException("사용자 저장 실패: " + usrId));
         } catch (Exception e) {
-            log.error("Oracle에서 MySQL로 사용자 정보 이전 실패: {}", usrId, e);
+            log.error("❌ Oracle에서 MySQL로 사용자 정보 이전 실패: {}", usrId, e);
             throw new RuntimeException("사용자 정보 이전에 실패했습니다: " + e.getMessage());
         }
     }

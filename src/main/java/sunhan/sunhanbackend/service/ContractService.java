@@ -1,6 +1,7 @@
 package sunhan.sunhanbackend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -15,9 +16,12 @@ import sunhan.sunhanbackend.dto.request.UpdateFormRequestDto;
 import sunhan.sunhanbackend.dto.response.ContractResponseDto;
 import sunhan.sunhanbackend.entity.mysql.EmploymentContract;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.entity.mysql.UserPermissionEntity;
 import sunhan.sunhanbackend.enums.ContractStatus;
 import sunhan.sunhanbackend.enums.ContractType;
+import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.repository.mysql.EmploymentContractRepository;
+import sunhan.sunhanbackend.repository.mysql.UserPermissionRepository;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 import java.io.IOException;
 import java.time.LocalDate;
@@ -34,6 +38,7 @@ import java.util.stream.Stream;
 public class ContractService {
     private final EmploymentContractRepository repo;
     private final UserRepository userRepository;
+    private final UserPermissionRepository permissionRepository;
     private final ObjectMapper objectMapper;
     private final FormService formService;
     private final UserService userService;
@@ -276,15 +281,29 @@ public class ContractService {
         UserEntity currentUser = userRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalStateException("사용자 정보를 찾을 수 없습니다: " + userId));
 
+        boolean isCreator = contract.getCreator().getUserId().equals(userId);
 
-        // 권한 체크: 작성자이거나 관리자(role=2 이상)
-        if (!contract.getCreator().getUserId().equals(userId)) {
-            throw new AccessDeniedException("근로계약서 삭제 권한이 없습니다.");
-        }
+        boolean hasHrPermission = permissionRepository.existsByUserIdAndPermissionType(
+                userId,
+                PermissionType.HR_CONTRACT
+        );
 
-        // 작성중(DRAFT) 상태만 삭제 가능
-        if (contract.getStatus() != ContractStatus.DRAFT) {
-            throw new IllegalStateException("작성중 상태의 근로계약서만 삭제할 수 있습니다.");
+        boolean isSuperAdmin = "6".equals(currentUser.getJobLevel());
+
+        // 3. 상태별 삭제 권한 체크
+        if (contract.getStatus() == ContractStatus.DRAFT) {
+            // DRAFT: 작성자, HR 권한자, Admin 삭제 가능
+            if (!isCreator && !hasHrPermission && !isSuperAdmin) {
+                throw new AccessDeniedException("작성중 상태의 근로계약서 삭제 권한이 없습니다.");
+            }
+        } else if (contract.getStatus() == ContractStatus.SENT_TO_EMPLOYEE) {
+            // SENT_TO_EMPLOYEE: HR 권한자, Admin만 삭제 가능
+            if (!hasHrPermission && !isSuperAdmin) {
+                throw new AccessDeniedException("발송된 계약서는 HR 담당자만 삭제할 수 있습니다.");
+            }
+        } else {
+            // 그 외 상태는 삭제 불가
+            throw new IllegalStateException("작성중 또는 발송된 상태의 근로계약서만 삭제할 수 있습니다.");
         }
 
         // 물리 삭제 대신 논리 삭제
@@ -303,6 +322,7 @@ public class ContractService {
         if (!c.getEmployee().getUserId().equals(empId)) {
             throw new AccessDeniedException("직원만 반려할 수 있습니다.");
         }
+
         if (c.getStatus() != ContractStatus.SENT_TO_EMPLOYEE) {
             throw new IllegalStateException("전송된 계약서만 반려할 수 있습니다.");
         }
@@ -391,6 +411,28 @@ public class ContractService {
                     formData.put("employerAddress", creator.getAddress());
                     formData.put("employerPhone",   creator.getPhone());
                 }
+                formData.put("contractSignDate", LocalDate.now().toString());
+                // ✅ 배열 필드 초기화
+                if (!formData.has("workTimeList")) {
+                    ArrayNode workTimeList = objectMapper.createArrayNode();
+                    workTimeList.add("");
+                    formData.set("workTimeList", workTimeList);
+                }
+
+                if (!formData.has("breakTimeList")) {
+                    ArrayNode breakTimeList = objectMapper.createArrayNode();
+                    breakTimeList.add("");
+                    formData.set("breakTimeList", breakTimeList);
+                }
+
+                if (!formData.has("workingHours")) {
+                    formData.put("workingHours", "209");
+                }
+
+                if (!formData.has("salaryMonths")) {
+                    formData.put("salaryMonths", "12");
+                }
+
                 try {
                     List<UserEntity> ceoUsers = userRepository.findByJobLevel("5");
                     UserEntity ceoUser = ceoUsers.stream().findFirst().orElse(null);

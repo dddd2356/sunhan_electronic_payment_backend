@@ -43,7 +43,7 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final OracleService oracleService;
-    private final PasswordEncoder passwdEncoder = new BCryptPasswordEncoder();
+    private final PasswordEncoder passwdEncoder;
     private final PermissionService permissionService;
     private final VacationService vacationService;
     private final DepartmentRepository departmentRepository;
@@ -52,12 +52,25 @@ public class UserService {
     private String uploadDir;  // "/uploads/signatures/"
 
     @Autowired
-    public UserService(UserRepository userRepository, OracleService oracleService, PermissionService permissionService, DepartmentRepository departmentRepository, @Lazy VacationService vacationService) {
+    public UserService(UserRepository userRepository, OracleService oracleService, PasswordEncoder passwdEncoder, PermissionService permissionService, DepartmentRepository departmentRepository, @Lazy VacationService vacationService) {
         this.userRepository = userRepository;
         this.oracleService = oracleService;
+        this.passwdEncoder = passwdEncoder;
         this.permissionService = permissionService;
         this.departmentRepository = departmentRepository;
         this.vacationService = vacationService;
+    }
+
+    /**
+     * 사용자 검색
+     */
+    @Transactional(readOnly = true)
+    public List<UserEntity> searchUsers(String query) {
+        if (query == null || query.trim().length() < 2) {
+            return Collections.emptyList();
+        }
+
+        return userRepository.searchUsers(query.trim());
     }
 
     /**
@@ -178,21 +191,21 @@ public class UserService {
      */
     @Transactional
     public boolean authenticateUser(String userId, String password) {
-        // 1. 'administrator' 계정은 Oracle에서 마이그레이션되지 않으므로, 먼저 예외 처리합니다.
+        // 1. 'administrator' 계정 예외 처리
         if ("administrator".equalsIgnoreCase(userId)) {
             log.info("administrator 로그인: Oracle 동기화 과정을 건너뜁니다.");
             Optional<UserEntity> adminUser = userRepository.findByUserId(userId);
             if (adminUser.isPresent()) {
-                return passwdEncoder.matches(password, adminUser.get().getPasswd());
+                boolean matches = passwdEncoder.matches(password, adminUser.get().getPasswd());
+                log.info("✅ Administrator 인증 결과: {}", matches);
+                return matches;
             } else {
-                // 이 경우는 발생해서는 안되지만, 방어적 코드
-                log.error("Administrator 계정이 MySQL에 존재하지 않습니다.");
+                log.error("❌ Administrator 계정이 MySQL에 존재하지 않습니다.");
                 return false;
             }
         }
 
-        // 2. 'administrator'가 아닌 일반 사용자 로그인 로직
-        // 2-1. MySQL에 사용자가 존재하는지 확인
+        // 2. MySQL에 사용자가 존재하는지 확인
         Optional<UserEntity> userOpt = userRepository.findByUserId(userId);
 
         if (userOpt.isPresent()) {
@@ -223,7 +236,6 @@ public class UserService {
                     needsUpdate = true;
                 }
 
-                // ✅ Oracle String 날짜를 LocalDate로 변환하여 비교
                 LocalDate oracleStartDate = DateUtil.parseOracleDate(oracleUser.getStartDate());
                 if (!Objects.equals(user.getStartDate(), oracleStartDate)) {
                     user.setStartDate(oracleStartDate);
@@ -232,7 +244,7 @@ public class UserService {
 
                 if (needsUpdate) {
                     log.info("Oracle의 정보가 MySQL과 다릅니다. 사용자 {}의 정보를 동기화합니다.", userId);
-                    userRepository.save(user);
+                    userRepository.saveAndFlush(user);
                 }
 
                 if (!"1".equals(oracleUser.getUseFlag())) {
@@ -245,25 +257,49 @@ public class UserService {
                 return false;
             }
 
-            // 2-3. 동기화 후, 정상적으로 비밀번호를 검사합니다.
-            return passwdEncoder.matches(password, user.getPasswd());
+            boolean result = passwdEncoder.matches(password, user.getPasswd());
+            log.info("✅ 기존 사용자 인증 결과 ({}): {}", userId, result);
+            return result;
 
         } else {
-            // 3. MySQL에 존재하지 않으면 첫 로그인으로 간주하고 Oracle에서 마이그레이션합니다.
+            // 3. MySQL에 없으면 Oracle 마이그레이션
             if (password.equals(userId) && oracleService.isUserExistsInOracle(userId)) {
-                CompletableFuture.runAsync(() -> {
-                    try {
-                        String encodedPasswordForMigration = passwdEncoder.encode(password);
-                        oracleService.migrateUserFromOracle(userId, encodedPasswordForMigration);
-                        log.info("[첫 로그인] Oracle 유저 '{}' MySQL 마이그레이션 완료", userId);
-                    } catch (Exception e) {
-                        log.error("Oracle 유저 마이그레이션 실패: {}", userId, e);
+                try {
+                    String encodedPasswordForMigration = passwdEncoder.encode(password);
+
+                    // ✅ 마이그레이션 전 한 번 더 체크
+                    if (userRepository.existsById(userId)) {
+                        log.warn("⚠️ 마이그레이션 직전 중복 감지: {}", userId);
+                        UserEntity existing = userRepository.findByUserId(userId).get();
+                        return passwdEncoder.matches(password, existing.getPasswd());
                     }
-                });
-                return true;
+
+                    // ✅ 마이그레이션 실행 후 즉시 flush
+                    UserEntity migratedUser = oracleService.migrateUserFromOracle(userId, encodedPasswordForMigration);
+                    userRepository.flush(); // ✅ 강제 DB 동기화
+
+                    log.info("✅ [첫 로그인] Oracle 유저 '{}' MySQL 마이그레이션 완료 (ID: {})",
+                            userId, migratedUser.getUserId());
+
+                    return true;
+
+                } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                    log.error("❌ 중복 키 오류로 마이그레이션 실패: {}. 기존 계정으로 로그인 시도", userId);
+                    userRepository.flush(); // ✅ 에러 발생 시에도 flush
+
+                    Optional<UserEntity> existing = userRepository.findByUserId(userId);
+                    if (existing.isPresent()) {
+                        return passwdEncoder.matches(password, existing.get().getPasswd());
+                    }
+                    return false;
+                } catch (Exception e) {
+                    log.error("❌ Oracle 유저 마이그레이션 실패: {}", userId, e);
+                    return false;
+                }
             }
         }
 
+        log.warn("❌ 인증 실패: {} (비밀번호 불일치 또는 Oracle에 없음)", userId);
         return false;
     }
 
@@ -284,30 +320,47 @@ public class UserService {
      * - 🔧 서명 업로드 - 트랜잭션 및 예외 처리 강화
      */
     @Transactional
-    @CacheEvict(value = "userCache", key = "#userId")
+    @CacheEvict(value = "userCache", key = "#userId", beforeInvocation = true)
     public void uploadSignature(String userId, MultipartFile file) throws IOException {
-        Optional<UserEntity> userOpt = userRepository.findByUserId(userId);
-        UserEntity user = userOpt.orElse(null);
-        if (user == null) {
-            throw new IllegalArgumentException("사용자 없음: " + userId);
+        log.info("=== 서명 업로드 요청 시작 === userId={}", userId);
+
+        // 1. 사용자 조회
+        Optional<UserEntity> userOpt = userRepository.findByUserIdNoCache(userId);
+        if (userOpt.isEmpty()) {
+            log.error("사용자 조회 실패 - userId={}", userId);
+            throw new IllegalArgumentException("사용자를 찾을 수 없습니다: " + userId);
+        }
+        UserEntity user = userOpt.get();
+        log.info("사용자 조회 성공 - userId={}, name={}", userId, user.getUserName());
+
+        // 2. 파일 검증 (가장 중요한 부분)
+        if (file == null) {
+            log.error("MultipartFile 객체가 null입니다 - userId={}", userId);
+            throw new IllegalArgumentException("파일 파라미터 'file'이 전송되지 않았습니다 (MultipartFile is null)");
         }
 
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("업로드할 파일이 없습니다.");
+        log.info("파일 기본 정보 - originalFilename={}, size={}, contentType={}",
+                file.getOriginalFilename(), file.getSize(), file.getContentType());
+
+        if (file.isEmpty()) {
+            log.error("파일이 비어있습니다 - userId={}, filename={}, size=0",
+                    userId, file.getOriginalFilename());
+            throw new IllegalArgumentException("업로드된 파일이 비어 있습니다 (파일 크기 0 byte)");
+        }
+
+        // 3. 파일 크기 제한
+        if (file.getSize() > 5 * 1024 * 1024) {
+            log.warn("파일 크기 초과 - size={} bytes", file.getSize());
+            throw new IllegalArgumentException("파일 크기는 5MB를 초과할 수 없습니다.");
         }
 
         try {
-            // 파일 크기 제한 (5MB)
-            if (file.getSize() > 5 * 1024 * 1024) {
-                throw new IllegalArgumentException("파일 크기는 5MB를 초과할 수 없습니다.");
-            }
-
-            String original = Objects.requireNonNull(file.getOriginalFilename());
+            String original = Objects.requireNonNull(file.getOriginalFilename(), "파일 이름이 null입니다");
             String ext = original.substring(original.lastIndexOf('.')).toLowerCase();
 
-            // 허용된 확장자 확인
             if (!Arrays.asList(".jpg", ".jpeg", ".png", ".gif").contains(ext)) {
-                throw new IllegalArgumentException("지원하지 않는 파일 형식입니다.");
+                log.warn("지원하지 않는 확장자 - ext={}", ext);
+                throw new IllegalArgumentException("지원하지 않는 파일 형식입니다. (jpg, jpeg, png, gif만 가능)");
             }
 
             String nameFiltered = user.getUserName()
@@ -323,11 +376,15 @@ public class UserService {
 
             if (!Files.exists(userDir)) {
                 Files.createDirectories(userDir);
+                log.info("디렉토리 생성 완료: {}", userDir);
             }
 
             String filename = String.format("%s_sign_image%s", nameFiltered, ext);
             Path targetPath = userDir.resolve(filename);
+
+            // 실제 파일 복사
             Files.copy(file.getInputStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+            log.info("파일 저장 성공: {}", targetPath);
 
             // DB 업데이트
             user.setSignimage(file.getBytes());
@@ -336,10 +393,14 @@ public class UserService {
             user.setSignpath("/uploads/sign_image/" + encodedFolder + "/" + encodedFilename);
 
             userRepository.save(user);
+            log.info("DB 업데이트 완료 - signpath={}", user.getSignpath());
 
         } catch (IOException e) {
-            log.error("서명 파일 업로드 실패: userId={}", userId, e);
+            log.error("서명 파일 업로드 중 IO 오류 발생 - userId={}", userId, e);
             throw new IOException("서명 파일 업로드 중 오류가 발생했습니다.", e);
+        } catch (Exception e) {
+            log.error("서명 업로드 중 예기치 않은 오류 - userId={}", userId, e);
+            throw e;
         }
     }
 
@@ -823,22 +884,17 @@ public class UserService {
         UserEntity user = userRepository.findByUserIdWithDepartment(targetUserId)
                 .orElseThrow(() -> new EntityNotFoundException("User not found: " + targetUserId));
 
-        // (선택) 권한 체크: requesterId vs targetUserId
-        // if (requesterId != null && !requesterId.equals(targetUserId)) { ... 권한 검증 ... }
-
         UserResponseDto dto = new UserResponseDto();
         dto.setUserId(user.getUserId());
         dto.setUserName(user.getUserName());
         dto.setDeptCode(user.getDeptCode());
-        // dto에 deptName 필드가 있으면 아래처럼 설정 (필요 시 DTO 확장)
-        // dto.setDeptName(user.getDepartment() != null ? user.getDepartment().getDeptName() : null);
         dto.setJobType(user.getJobType());
         dto.setJobLevel(user.getJobLevel());
         dto.setPhone(user.getPhone());
         dto.setAddress(user.getAddress());
         dto.setDetailAddress(user.getDetailAddress());
         dto.setRole(user.getRole() != null ? user.getRole().toString() : null);
-        dto.setSignimage(null); // 권장: byte[] 대신 signature URL 제공
+        dto.setSignimage(null);
         dto.setPrivacyConsent(user.getPrivacyConsent());
         dto.setNotificationConsent(user.getNotificationConsent());
         dto.setUseFlag(user.getUseFlag());
@@ -851,6 +907,7 @@ public class UserService {
                 .collect(Collectors.toList());
         dto.setPermissions(Stream.concat(userPerms.stream(), deptPerms.stream()).distinct().collect(Collectors.toList()));
 
+        // ✅ 연차 정보 조회 - 예외 처리 강화
         try {
             VacationStatusResponseDto vacationStatus = vacationService.getVacationStatus(
                     user.getUserId(),
@@ -858,6 +915,11 @@ public class UserService {
             );
             dto.setTotalVacationDays(vacationStatus.getAnnualTotalDays());
             dto.setUsedVacationDays(vacationStatus.getAnnualUsedDays());
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // ✅ 중복 키 오류 무시하고 기본값 설정
+            log.warn("연차 정보 중복 키 오류 무시: userId={}", user.getUserId());
+            dto.setTotalVacationDays(0.0);
+            dto.setUsedVacationDays(0.0);
         } catch (Exception e) {
             log.warn("연차 정보 조회 실패: userId={}", user.getUserId(), e);
             dto.setTotalVacationDays(0.0);

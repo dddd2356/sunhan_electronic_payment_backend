@@ -143,7 +143,7 @@ public class LeaveApplication {
 
     @Deprecated
     @Column(name = "is_center_director_approved")
-    private Boolean isCenterDirectorApproved = false; // 진료센터장 승인 여부
+    private Boolean isCenterDirectorApproved = false; // 센터장 승인 여부
 
     @Deprecated
     @Column(name = "is_hr_final_approved")

@@ -10,10 +10,12 @@ import org.springframework.http.*;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import sunhan.sunhanbackend.dto.request.auth.SignInRequestDto;
 import sunhan.sunhanbackend.dto.response.ResponseDto;
 import sunhan.sunhanbackend.dto.response.auth.SignInResponseDto;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
+import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.provider.JwtProvider;
 import sunhan.sunhanbackend.repository.mysql.UserRepository;
 
@@ -24,69 +26,76 @@ import sunhan.sunhanbackend.repository.mysql.UserRepository;
 public class AuthServiceImplement implements AuthService {
 
     private final UserRepository userRepository;
-    private PasswordEncoder passwdEncoder = new BCryptPasswordEncoder();
+    private final UserService userService;
+    private final PasswordEncoder passwdEncoder;
     private final JwtProvider jwtProvider;
 
     @Override
+    @Transactional
     public ResponseEntity<? super SignInResponseDto> signIn(SignInRequestDto dto) {
         try {
             String userId = dto.getId();
-            // userRepository.findByUserId()가 Optional을 반환하므로, orElse(null)을 사용해 UserEntity 또는 null을 받습니다.
-            UserEntity userEntity = userRepository.findByUserId(userId).orElse(null);
-
-            if (userEntity == null)
-                return SignInResponseDto.signInFail();
-
             String passwd = dto.getPasswd();
-            String storedPasswd = userEntity.getPasswd();
 
-            boolean isMatched;
-            // BCrypt 해시인지 평문인지 확인
-            if (storedPasswd.startsWith("$2a$") || storedPasswd.startsWith("$2b$")) {
-                // BCrypt 비교
-                isMatched = passwdEncoder.matches(passwd, storedPasswd);
-            } else {
-                // 평문 비교 (기존 데이터 및 디폴트 비밀번호용)
-                isMatched = passwd.equals(storedPasswd);
+            // ✅ UserService.authenticateUser()가 모든 인증 로직 처리
+            boolean authenticated = userService.authenticateUser(userId, passwd);
+
+            if (!authenticated) {
+                log.warn("❌ Authentication failed for userId: {}", userId);
+                return SignInResponseDto.signInFail();
             }
 
-            if (!isMatched)
-                return SignInResponseDto.signInFail();
+            // ✅ 캐시 우회 조회 (재시도 제거)
+            UserEntity userEntity = userRepository.findByUserIdNoCache(userId)
+                    .orElseThrow(() -> new RuntimeException("User not found after authentication: " + userId));
 
+            // ✅ 토큰 생성
             String token = jwtProvider.create(userId, userEntity.getJobLevel());
             long expiresIn = jwtProvider.getAccessTokenExpirationTime();
-            log.info("SignIn - userId: {}, expiresIn: {} seconds", userId, expiresIn);
+
+            log.info("✅ 로그인 성공 - userId: {}, jobLevel: {}, expiresIn: {} seconds",
+                    userId, userEntity.getJobLevel(), expiresIn);
 
             return SignInResponseDto.success(token, expiresIn);
+
         } catch (Exception exception) {
-            log.error("SignIn error", exception);
+            log.error("❌ SignIn error", exception);
             return ResponseDto.databaseError();
         }
     }
 
     @Override
     public ResponseEntity<String> logout(HttpServletRequest request, HttpServletResponse response, String loginMethod) {
-        String token = null;
-        Cookie[] cookies = request.getCookies();
+        try {
+            // 세션 무효화
+            HttpSession session = request.getSession(false);
+            if (session != null) {
+                session.invalidate();
+                log.info("✅ Session invalidated");
+            }
 
-        HttpSession session = request.getSession(false);
-        if (session != null) {
-            session.invalidate();
-        }
+            // 쿠키 삭제
+            Cookie[] cookies = request.getCookies();
+            if (cookies != null) {
+                for (Cookie cookie : cookies) {
+                    if ("accessToken".equals(cookie.getName())) {
+                        Cookie deleteCookie = new Cookie("accessToken", null);
+                        deleteCookie.setMaxAge(0);
+                        deleteCookie.setPath("/");
+                        deleteCookie.setHttpOnly(true);
+                        deleteCookie.setSecure(true);
+                        response.addCookie(deleteCookie);
+                        log.info("✅ AccessToken cookie deleted");
+                    }
+                }
+            }
 
-        Cookie sessionCookie = new Cookie("Idea-b5e63b4f", null);
-        sessionCookie.setMaxAge(0);
-        sessionCookie.setDomain("localhost:9090");
-        sessionCookie.setPath("/");
-        sessionCookie.setSecure(false);
-        sessionCookie.setHttpOnly(true);
-        response.addCookie(sessionCookie);
+            return ResponseEntity.ok("로그아웃 완료");
 
-
-        if (token == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(loginMethod + " 토큰이 없습니다.");
-        } else {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("지원되지 않는 로그인 방식입니다.");
+        } catch (Exception e) {
+            log.error("❌ Logout error", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("로그아웃 처리 중 오류 발생");
         }
     }
 

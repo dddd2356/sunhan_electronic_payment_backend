@@ -198,7 +198,7 @@ public class LeaveApplicationResponseDto {
                return switch (lvl) {
                      case "0" -> "사원";
                        case "1" -> "부서장";
-                       case "2" -> "진료센터장";
+                       case "2" -> "센터장";
                        case "3" -> "원장";
                        case "4" -> "행정원장";
                        case "5" -> "대표원장";

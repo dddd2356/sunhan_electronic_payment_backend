@@ -49,13 +49,13 @@ public class HtmlPdfRenderer {
     
     .contract-header {
         text-align: center;
-        margin-bottom: 20px;
+        margin-bottom: 10px;
     }
     
     .contract-header h1 {
-        font-size: 20px;
+        font-size: 30px;
         font-weight: bold;
-        margin: 0 0 15px 0;
+        margin: 0 0 10px 0;
         letter-spacing: 4px;
         color: #333;
     }
@@ -71,10 +71,11 @@ public class HtmlPdfRenderer {
     .parties-table th,
     .parties-table td {
         border: 1px solid #333;
-        padding: 6px;
+        padding: 6px 3px;
         text-align: center;
-      
+        line-height: 1.1;
     }
+   
     
     .parties-table .section-header {
         background-color: #f2f2f2;
@@ -101,7 +102,7 @@ public class HtmlPdfRenderer {
     
     .parties-table .input-cell {
         text-align: center;
-        padding: 8px 4px;
+        padding: 4px 3px;
     }
     
     .parties-table .section-body {
@@ -120,14 +121,14 @@ public class HtmlPdfRenderer {
     }
     
     .clause {
-        margin-bottom: 15px;
+        margin-bottom: 5px;
         page-break-inside: avoid;
     }
     
     .clause h3 {
         font-size: 14px;
         font-weight: bold;
-        margin: 10px 0 8px 0;
+        margin: 3px 0 8px 0;
         border-bottom: 1px solid #eee;
         padding-bottom: 3px;
     }
@@ -136,13 +137,15 @@ public class HtmlPdfRenderer {
         font-size: 12px;
         line-height: 1.5;
         margin: 8px 0;
-        text-align: justify;
+        text-align: left;
     }
     
     .input-group {
         display: block;
-        margin: 8px 0;
-        line-height: 1.6;
+        margin: 4px 0;  /* 기존 8px에서 4px로 축소 */
+        line-height: 1.4;  /* 줄 높이 명확히 지정 */
+        min-height: 20px;  /* 최소 높이 보장 */
+        text-align: left;
     }
     
     .input-group p {
@@ -154,10 +157,8 @@ public class HtmlPdfRenderer {
         display: inline-block;
         min-width: 150px;
         border: none;
-        border-bottom: 1px solid #333;
         padding: 2px 5px;
         font-size: 12px;
-        text-align: center;
     }
     
     .ch-input {
@@ -182,16 +183,17 @@ public class HtmlPdfRenderer {
     .consent-row {
         background-color: #e5e5e5;
         border: 2px solid #000;
-        padding: 10px 20px;
+        padding: 3px 20px;  /* 기존 5px에서 3px로 축소 */
         box-sizing: border-box;
         margin: 0;
         width: 100%;
-        min-height: 40px;
-        overflow: hidden; /* clearfix 효과 */
+        min-height: 25px;  /* 기존 30px에서 25px로 축소 */
+        overflow: hidden;
     }
 
     .checkbox-section {
-        float: left;
+        display: inline-block;
+        vertical-align: middle;
             width: 60%; /* 적절한 비율로 조정 */
             margin: 0;
             padding: 0;
@@ -209,7 +211,8 @@ public class HtmlPdfRenderer {
      }
     
      .signature-section {
-          float: right;
+          display: inline-block;
+          vertical-align: middle;
             width: 35%;
             text-align: right;
             white-space: nowrap;
@@ -282,7 +285,7 @@ public class HtmlPdfRenderer {
      .signature-image {
         vertical-align: middle !important;
         max-width: 70px !important;
-        height: 30px !important;
+        height: 25px !important;
      }
      
      .consent-row:after {
@@ -361,6 +364,11 @@ public class HtmlPdfRenderer {
                     text-align: center;
                     vertical-align: middle;
                 }
+                .clause-break-before {
+                    page-break-before: always;
+                    margin-top: 0;
+                    padding-top: 0;
+                }
 
     /* 페이지별 특별 스타일 */
     .page1 { min-height: 260mm; }
@@ -430,8 +438,8 @@ public class HtmlPdfRenderer {
         html.append("<h1>").append(Objects.toString(formData.getContractTitle(), "근로계약서【연봉제】")).append("</h1>");
         html.append("</div>");
         html.append("<div style=\"text-align: left;\">");
-        html.append("선한병원(이하 '사용자'라 한다)와(과) ");
-        html.append("<span style=\"text-align:center; display:inline-block; min-width:100px;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
+        html.append("선한병원(이하 '사용자'라 한다)과 ");
+        html.append("<span style=\"text-align:center; border-bottom: 1px solid #333; display:inline-block; min-width:100px;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
         html.append(" (이하 '근로자'라 한다)는(은) 다음과 같이 근로 계약을 체결하고 상호 성실히 준수할 것을 확약한다.");
         html.append("</div>");
         html.append("<br/>");
@@ -480,50 +488,105 @@ public class HtmlPdfRenderer {
         html.append("<div class=\"contract-content\">");
         html.append("<div class=\"clause\">");
         html.append("<h3>제 1 조 【취업 장소 및 취업직종】</h3>");
-        html.append("<p class=\"input-group\">");
-        html.append("① 취업장소 : 사업장 소재지 및 회사가 지정한 소재지 &#160;&#160;&#160;&#160;");
-        html.append("② 취업직종 :&#160;");
-        html.append("<span class=\"wide-input\" style=\"margin : 0; border-bottom:1px solid #333; display:inline-block;\">").append(Objects.toString(formData.employmentOccupation, "")).append("</span>");
+        html.append("<p class=\"input-group\" style=\"text-align: left; line-height: 1.6;\">");
+        html.append("① 취업장소 : 사업장 소재지 및 회사가 지정한 소재지 &#160;&#160;");
+        html.append("② 취업직종 : ");
+        html.append("<span style=\"word-wrap: break-word; word-break: break-word;\">");
+        html.append(Objects.toString(formData.employmentOccupation, ""));
+        html.append("</span>");
         html.append("</p>");
         html.append("<p>");
-        html.append("③ '사용자'는 업무상 필요에 의해서 '근로자'의 근무장소 및 부서 또는 담당업무를 변경할 수 있으며 근로자는 이에 성실히 따라야 한다");
+        html.append("③ '사용자'는 업무상 필요에 의해서 '근로자'의 근무장소 및 부서 또는 담당업무를 변경할 수 있으며 근로자는 이에 성실히 따라야 한다.");
         html.append("</p>");
         html.append("</div>");
 
         html.append("<div class=\"clause\">");
         html.append("<h3>제 2 조 【근로계약기간】</h3>");
         html.append("<div class=\"input-group\">");
-        html.append("<p>①최초입사일 :</p>");
-        html.append("<span class=\"wide-input\" style=\"border-bottom:1px solid #333; display:inline-block;\">").append(Objects.toString(formData.startDate, "")).append("</span>");
+        html.append("<p>① 최초입사일 :</p>");
+        html.append("<span class=\"wide-input\" style=\"display:inline-block;\">").append(Objects.toString(formData.startDate, "")).append("</span>");
         html.append("</div>");
         html.append("<div class=\"input-group\">");
-        html.append("<p>②근로계약기간 : </p>");
-        html.append("<span class=\"wide-input\" style=\"border-bottom:1px solid #333; display:inline-block;\">").append(Objects.toString(formData.contractDate, "")).append("</span>");
+        html.append("<p>② 근로계약기간 :</p>");
+        html.append("<span class=\"wide-input\" style=\"display:inline-block;\">")
+                .append(Objects.toString(formData.contractDate, "")).append("</span>");
+        html.append("</div>");
+        html.append("<div class=\"input-group\">");
+        html.append("<p>③ 근로조건 적용기간 :</p>");
+        html.append("<span class=\"wide-input\" style=\"display:inline-block;\">")
+                .append(Objects.toString(formData.conditionApplyDate, "")).append("</span>");
         html.append("</div>");
         html.append("<p>");
-        html.append("③ 본 계약의 유효기간은 제 ②항을 원칙으로 하며 매년 연봉 등 근로 조건에 대한 재계약을 체결하고 재계약 체결 시에는 \"사용자\"는 ");
-        html.append("\"근로자\"에게 30일 전에 재계약 체결에 대한 기일 통보를 한다. 또한 매년 재계약 체결시 \"사용자\"가 제시한 기일 내에 \"근로자\"가 ");
+        html.append("④ 본 계약의 유효기간은 제 ②항을 원칙으로 하며 매년 연봉 등 근로 조건에 대한 재계약을 체결하고 재계약 체결 시에는 '사용자'는 ");
+        html.append("'근로자'에게 30일 전에 재계약 체결에 대한 기일 통보를 한다. 또한 매년 재계약 체결 시 '사용자'가 제시한 기일 내에 '근로자'가 ");
         html.append("재계약에 응하지 않을 때에는 근로계약의 해지의사로 간주하여 근로계약은 자동으로 종료된다.");
         html.append("</p>");
         html.append("<p>");
-        html.append("④ 계약기간 중 '근로자'가 계약을 해지하고자 할 때에는 30일 전에 사직서를 제출하여 업무인수인계가 원활히 이루어지도록 하여야 ");
+        html.append("⑤ 계약기간 중 '근로자'가 계약을 해지하고자 할 때에는 30일 전에 사직서를 제출하여 업무인수인계가 원활히 이루어지도록 하여야 ");
         html.append("하며, 만약 사직서가 수리되기 전에 출근 명령 등에 불응하였을 때에는 그 기간에 대하여 결근 처리한다.");
         html.append("</p>");
+        html.append("</div>");
+        html.append("<div class=\"clause\">");
         html.append("<h3>제 3 조 【근로시간 및 휴게시간】</h3>");
-        html.append("<div class=\"input-group\">");
-        html.append("<p>① 근로시간 : </p>");
-        html.append("<span class=\"wide-input\" style=\"border-bottom:1px solid #333; display:inline-block;\">").append(Objects.toString(formData.workTime, "")).append("</span>");
-        html.append("</div>");
-        html.append("<div class=\"input-group\">");
-        html.append("<p>② 휴게시간 : </p>");
-        html.append("<span class=\"wide-input\" style=\"border-bottom:1px solid #333; display:inline-block;\">").append(Objects.toString(formData.breakTime, "")).append("</span>");
-        html.append("</div>");
-        html.append("<p>③ 제 ①항 및 ②항은 \"사용자\"의 병원운영상 필요와 계절의 변화에 의해 변경할 수 있으며 \"근로자\"는 근로형태에 따라 1주일에 ");
+// === ① 근로시간 부분 ===
+        if (formData.workTimeList != null && !formData.workTimeList.isEmpty()) {
+            for (int i = 0; i < formData.workTimeList.size(); i++) {
+                html.append("<div class=\"input-group\">");
+                if (i == 0) {
+                    html.append("<p style=\"display: inline-block; width: 85px;\">① 근로시간 &#160;:</p>");
+                } else {
+                    html.append("<span style=\"display: inline-block; width: 85px;\">&#160;</span>");  // &#160; 사용
+                }
+                html.append("<span style=\"display: inline-block; width: calc(100% - 90px); white-space: nowrap;\">")
+                        .append(Objects.toString(formData.workTimeList.get(i), ""))
+                        .append("</span>");
+                html.append("</div>");
+            }
+        } else {
+            for (int i = 0; i < 3; i++) {
+                html.append("<div class=\"input-group\">");
+                if (i == 0) {
+                    html.append("<p style=\"display: inline-block; width: 85px;\">① 근로시간 &#160;:</p>");
+                } else {
+                    html.append("<span style=\"display: inline-block; width: 85px;\">&#160;</span>");  // &#160; 사용
+                }
+                html.append("<span style=\"display: inline-block; width: calc(100% - 90px); white-space: nowrap;\"></span>");
+                html.append("</div>");
+            }
+        }
+
+// === ② 휴게시간 부분 ===
+        if (formData.breakTimeList != null && !formData.breakTimeList.isEmpty()) {
+            for (int i = 0; i < formData.breakTimeList.size(); i++) {
+                html.append("<div class=\"input-group\">");
+                if (i == 0) {
+                    html.append("<p style=\"display: inline-block; width: 85px;\">② 휴게시간 &#160;:</p>");
+                } else {
+                    html.append("<span style=\"display: inline-block; width: 85px;\">&#160;</span>");  // &#160; 사용
+                }
+                html.append("<span style=\"display: inline-block; width: calc(100% - 90px); white-space: nowrap;\">")
+                        .append(Objects.toString(formData.breakTimeList.get(i), ""))
+                        .append("</span>");
+                html.append("</div>");
+            }
+        } else {
+            for (int i = 0; i < 4; i++) {
+                html.append("<div class=\"input-group\">");
+                if (i == 0) {
+                    html.append("<p style=\"display: inline-block; width: 85px;\">② 휴게시간 &#160;:</p>");
+                } else {
+                    html.append("<span style=\"display: inline-block; width: 85px;\">&#160;</span>");  // &#160; 사용
+                }
+                html.append("<span style=\"display: inline-block; width: calc(100% - 90px); white-space: nowrap;\"></span>");
+                html.append("</div>");
+            }
+        }
+        html.append("<p>③ 제 ①항 및 ②항은 '사용자'의 병원운영상 필요와 계절의 변화에 의해 변경할 수 있으며 '근로자'는 근로형태에 따라 1주일에 ");
         html.append("12시간 한도로 근로를 연장할 수 있으며, 근로자는 발생할 수 있는 연장, 야간 및 휴일근로를 시행하는 것에 동의한다.</p>");
 
         html.append("<div class=\"consent-container\">");
         // [설명] display: table을 사용하여 내부 요소들이 같은 높이를 공유하게 함
-        html.append("<div class=\"consent-row\" style=\"display: table; width: 100%; padding: 5px 0; min-height: 40px;\">");
+        html.append("<div class=\"consent-row\" style=\"display: table; width: 100%; padding: 5px 0; min-height: 30px;\">");
 
         // 1. 체크박스 영역 (왼쪽 셀)
         html.append("<div class=\"checkbox-section\" style=\"display: table-cell; vertical-align: middle; width: 60%; text-align: left; padding-left: 20px;\">");
@@ -555,48 +618,42 @@ public class HtmlPdfRenderer {
         html.append("</div>"); // checkbox-section 끝
 
         // 2. 서명 섹션 (오른쪽 셀)
-        html.append("<div class=\"signature-section\" style=\"display: table-cell; vertical-align: middle; width: 40%; text-align: right; padding-right: 20px; white-space: nowrap;\">");
-        html.append("<span class=\"signature-label\" style=\"margin-right: 5px; vertical-align: middle;\">동의자 :</span>");
+        // 2. 서명 섹션 (오른쪽 셀) - 전체 교체
+        html.append("<div class=\"signature-section\" style=\"display: table-cell; vertical-align: middle; width: 45%; text-align: right; padding-right: 10px;\">");
+        html.append("<span class=\"signature-label\" style=\"display: inline-block; margin-right: 3px; font-size: 12px;\">동의자 :</span>");
 
-        // 이름과 서명을 감싸는 컨테이너
-        html.append("<span style=\"display: inline-block; vertical-align: middle;\">");
+// 이름과 서명을 감싸는 컨테이너 - TABLE 사용으로 변경
+        html.append("<span style=\"display: inline-table; vertical-align: middle;\">");
 
         if (formData.signatures != null && formData.signatures.containsKey("page1")) {
             List<ContractFormData.SignatureEntry> page1Signatures = formData.signatures.get("page1");
             if (page1Signatures != null && !page1Signatures.isEmpty()) {
                 ContractFormData.SignatureEntry sig = page1Signatures.get(0);
                 // 이름
-                html.append("<span style=\"display: inline-block; min-width: 60px; margin-right: 5px; vertical-align: middle; text-align: center;\">")
+                html.append("<span style=\"display: table-cell; width: 55px; text-align: center; vertical-align: middle;\">")
                         .append(Objects.toString(formData.employeeName, "")).append("</span>");
                 // 서명 이미지 또는 텍스트
+                html.append("<span style=\"display: table-cell; vertical-align: middle; padding-left: 3px;\">");
                 if (sig.isSigned && sig.imageUrl != null && !sig.imageUrl.isEmpty()) {
-                    html.append("<img src=\"").append(sig.imageUrl).append("\" alt=\"서명\" class=\"signature-image\" style=\"height: 30px; vertical-align: middle;\"/>");
+                    html.append("<img src=\"").append(sig.imageUrl).append("\" alt=\"서명\" style=\"height: 25px; max-width: 65px; display: block;\"/>");
                 } else {
-                    html.append("<span class=\"signature-text\" style=\"vertical-align: middle;\">(서명/인)</span>");
+                    html.append("<span style=\"font-size: 11px; color: #666;\">(서명/인)</span>");
                 }
+                html.append("</span>");
             }
         } else {
             // 서명이 없는 경우
-            html.append("<span style=\"display: inline-block; border-bottom: 1px solid #333; min-width: 60px; margin-right: 5px; text-align: center; vertical-align: middle;\">")
+            html.append("<span style=\"display: table-cell; border-bottom: 1px solid #333; width: 55px; text-align: center; vertical-align: middle;\">")
                     .append(Objects.toString(formData.employeeName, "")).append("</span>");
-            html.append("<span class=\"signature-text\" style=\"vertical-align: middle;\">(서명/인)</span>");
+            html.append("<span style=\"display: table-cell; vertical-align: middle; padding-left: 3px;\">");
+            html.append("<span style=\"font-size: 11px; color: #666;\">(서명/인)</span>");
+            html.append("</span>");
         }
 
-        html.append("</span>");
+        html.append("</span>"); // inline-table 컨테이너 끝
         html.append("</div>"); // signature-section 끝
         html.append("</div>"); // consent-row 끝
         html.append("</div>"); // consent-container 끝
-        html.append("</div>"); // clause
-
-        html.append("<div class=\"clause\">");
-        html.append("<h3>제 4 조 【연봉계약】</h3>");
-        html.append("<div class=\"input-group\">");
-        html.append("<p>① 연봉계약 기간 : </p>");
-        html.append("<span class=\"wide-input\" style=\"border-bottom:1px solid #333; display:inline-block;\">").append(Objects.toString(formData.salaryContractDate, "")).append("</span>");
-        html.append("</div>");
-        html.append("<div>");
-        html.append("<p>② 연봉계약의 종료일까지 재계약이 체결되지 않을 경우 재계약 체결일까지 동일한 조건으로 재계약이 체결된 것으로 한다.</p>");
-        html.append("</div>");
         html.append("</div>"); // clause
         html.append("</div>"); // contract-content
 
@@ -604,8 +661,20 @@ public class HtmlPdfRenderer {
         html.append("<div class=\"page-break\"></div>"); // Page break
         html.append("<div class=\"contract-content\">");
         html.append("<div class=\"clause\">");
+        html.append("<h3>제 4 조 【연봉계약】</h3>");
+        html.append("<div class=\"input-group\">");
+        html.append("<p>① 연봉계약 기간 : </p>");
+        html.append("<span class=\"wide-input\" style=\"display:inline-block;\">").append(Objects.toString(formData.salaryContractDate, "")).append("</span>");
+        html.append("</div>");
+        html.append("<div>");
+        html.append("<p>② 연봉계약의 종료일까지 재계약이 체결되지 않을 경우 재계약 체결일까지 동일한 조건으로 재계약이 체결된 것으로 한다.</p>");
+        html.append("</div>");
+        html.append("</div>"); // clause
+        html.append("<div class=\"clause\">");
         html.append("<h3>제 5 조 【임금 및 구성항목】</h3>");
-        html.append("<p>① 연봉은 아래의 각 수당을 포함하고, 12개월 균등 분할하여 매월 지급한다.</p>");
+        html.append("<p>① 연봉은 아래의 각 수당을 포함하고, ")
+                .append(Objects.toString(formData.getSalaryMonths(), "12"))
+                .append("개월 균등 분할하여 매월 지급한다.</p>");
         html.append("<div class=\"parties-table\">"); // Reusing parties-table class for general tables
         html.append("<table>");
         html.append("<thead>");
@@ -621,7 +690,10 @@ public class HtmlPdfRenderer {
         html.append("<td style=\"border-top: 3px double #333;\" colspan=\"1\" class=\"input-cell\">");
         html.append(Objects.toString(formData.totalAnnualSalary, ""));
         html.append("</td>");
-        html.append("<td style=\"border-top: 3px double #333;\" colspan=\"3\" class=\"section-body\">월급여총액 x 12개월</td>");
+        html.append("<td style=\"border-top: 3px double #333;\" colspan=\"3\" class=\"section-body\">");
+        html.append("월급여총액 x ");
+        html.append(Objects.toString(formData.getSalaryMonths(), "12"));
+        html.append("개월</td>");
         html.append("</tr>");
         html.append("<tr>");
         html.append("<th rowspan=\"11\" class=\"party-header\">연봉</th>");
@@ -632,7 +704,10 @@ public class HtmlPdfRenderer {
         html.append("<tr>");
         html.append("<th class=\"party-header\">기본급</th>");
         html.append("<td class=\"input-cell\">").append(Objects.toString(formData.basicSalary, "")).append("</td>");
-        html.append("<td colspan=\"1\" rowspan=\"6\" class=\"section-body calculation-basis\">209시간</td>");
+        html.append("<td colspan=\"1\" rowspan=\"6\" class=\"section-body calculation-basis\">");
+        html.append("<span style=\"display: inline-block; text-align: center;\">")
+                .append(Objects.toString(formData.getWorkingHours(), "209"))
+                .append("</span>시간</td>");
         html.append("<td colspan=\"2\" rowspan=\"6\" class=\"section-body calculation-basis\">소정근로시간 x 통상시급 x 1.0</td>");
         html.append("</tr>");
         html.append("<tr>");
@@ -685,11 +760,11 @@ public class HtmlPdfRenderer {
         html.append("<p>④ 매월 임금 정산 시에는 소득세와 사회보험료 등을 원천징수한 후 지급한다.</p>");
         html.append("<p>⑤ 근로자의 의무나이트(당직) 개수를 지정하여 지정 개수만큼의 수당을 연봉에 포함한다.</p>");
         html.append("<p class=\"input-group\" style=\"display: block; line-height: 1.6;\">⑥ 근로자의 의무나이트(당직)개수는 ");
-        html.append("<u><span class=\"ch-input\" style=\"margin: 0; font-weight: bolder; display: inline-block; text-align: center; min-width: 30px;\">").append(Objects.toString(formData.dutyNight, "")).append("</span></u>");
+        html.append("<u><span class=\"ch-input\" style=\"margin: 0; font-weight: bolder; display: inline-block; text-align: center; min-width: 30px;\">").append(Objects.toString(formData.dutyNight, "")).append("개</span></u>");
         html.append("로 지정하고,의무나이트(당직)개수를 기준으로 매월 부족한 개수에 대해서는 ①항의 연봉에서 삭감하고 초과한 개수에 대해서는 추가 지급한다.");
         html.append("</p>");
         html.append("<p>⑦ 제 ①항의 임금에 관한 내용은 다른 직원들에게 비밀을 유지하며, 이를 위반할 경우 중징계 대상이 될수 있다.</p>");
-        html.append("<p>⑧ 3개월 미만 제직 후 퇴사할 경우 유니폼 구입비용(업체 거래명에서 금액) 100%와 채용 시 지출했던 특수검진비 100%를 퇴직 월급여에서 공제 후 지급한다.</p>");
+        html.append("<p>⑧ 3개월 미만 재직 후 퇴사할 경우 유니폼 구입비용(업체 거래명세서 금액) 100%와 채용 시 지출했던 특수검진비 100%를 퇴직 월급여에서 공제 후 지급한다.</p>");
         html.append("<p>⑨ 이외의 사항은 급여규정에 따른다.</p>");
         html.append("</div>"); // clause
 
@@ -699,10 +774,14 @@ public class HtmlPdfRenderer {
         html.append("① 제 3조(근로시간 및 휴게)에서 정한 근로시간에 '사용자'의 근무지시에도 불구하고 지각, 조퇴 및 결근한 경우에는 「근로 기준법」이 정하는 바에 따라 ");
         html.append("지급될 수 있고, 결근 1일에 대해서는 근로자 통상시급에 시간을 비례해서 공제하며, 제5조(임금 및 구성항목) 제 ①항에서 정한 급여를 차감하여 지급한다.");
         html.append("</p>");
+        html.append("<p>");
+        html.append("② '근로자'가 월 중 신규채용, 중도퇴사, 휴직, 복직 등의 사유로 그 월의 근무일수가 1개월에 미달할 경우에는 임금 및 구성항목별 임금액을 최종 근로일까지의 ");
+        html.append("일수에 비례하여 해당 월의 총 일수로 일할 계산한 후 지급하며, 주휴수당은 만근 시에만 지급한다.");
+        html.append("</p>");
         html.append("</div>"); // clause
 
         // Page 2 Signature
-        html.append("<div class=\"signature-section\" style=\"display: flex; align-items: center; justify-content: flex-end; margin-top: 20px;\">");
+        html.append("<div style=\"text-align: right; margin-top: 10px;\">");
         html.append("<span class=\"signature-label\" style=\"margin-right: 10px; line-height: 1.4; display: inline-block; vertical-align: middle;\">확인 :</span>");
 
         if (formData.signatures != null && formData.signatures.containsKey("page2")) {
@@ -733,10 +812,6 @@ public class HtmlPdfRenderer {
         html.append("<div class=\"page-break\"></div>"); // Page break
         html.append("<div class=\"contract-content\">");
         html.append("<div class=\"clause\">");
-        html.append("<p>");
-        html.append("②'근로자'가 월 중 신규채용, 중도퇴사, 휴직, 복직 등의 사유로 그 월의 근무일수가 1개월에 미달할 경우에는 임금 및 구성항목별 임금액을 최종 근로일까지의 ");
-        html.append("일수에 비례하여 해당 월의 총 일수로 일할 계산한 후 지급하며, 주휴수당은 만근시에만 지급한다.");
-        html.append("</p>");
         html.append("<h3>제 7 조 【휴일 및 휴가】</h3>");
         html.append("<p>");
         html.append("① 휴일 : 주휴일(주1회), 근로자의 날, 「근로 기준법」에서 정한 날, 기타 취업규칙에서 정한 날. 다만, 주휴일은 회사업무의 특성상 부서별 또는 ");
@@ -772,19 +847,19 @@ public class HtmlPdfRenderer {
         html.append("<div class=\"clause\">");
         html.append("<h3>제 10 조 【안전관리】</h3>");
         html.append("<p>");
-        html.append("① \"근로자\"는 \"사용자\"가 정한 안전관리에 관한 제규칙과 관리자의 지시 사항을 준수하고 재해 발생시에는 산업재해 보상보험법에 의한다.");
+        html.append("① '근로자'는 '사용자'가 정한 안전관리에 관한 제규칙과 관리자의 지시 사항을 준수하고 재해 발생시에는 산업재해 보상보험법에 의한다.");
         html.append("</p>");
         html.append("</div>"); // clause
         // 제 11 조 【근로계약해지】
         html.append("<div class=\"clause\">");
         html.append("  <h3>제 11 조 【근로계약해지】</h3>");
-        html.append("  <p>① \"근로자\"가 취업규칙 또는 다음 각 호에 해당하는 경우에 대해서는 \"사용자\"는 \"근로자\"를 징계위원회에 회부하여 징계위원회 결정에 따라 처리한다.</p>");
-        html.append("  <p>1. \"근로자\"가 직원을 선동하여 업무를 방해하고 불법으로 유인물을 배포할 때.</p>");
-        html.append("  <p>2. \"근로자\"가 무단결근을 계속하여 연속 3일, 월간 5일 또는 년 20일 이상 무단결근한 경우.</p>");
-        html.append("  <p>3. \"근로자\"가 근무성적 또는 능력이 현저히 불량하여 업무 수행이 불가능하다고 인정될 때.</p>");
-        html.append("  <p>4. \"사용자\"의 허가 없이 을 문서, 비품, 자산 등을 외부로 반출하거나 대여했을 때.</p>");
-        html.append("  <p>5. 기타 이에 준하는 행위를 하였다고 판단될 때.</p>");
-        html.append("  <p>② \"근로자\"가 30일 전 사직서를 제출하고 후임자에게 인수인계를 완료한 경우.</p>");
+        html.append("  <p>① '근로자'가 취업규칙 또는 다음 각 호에 해당하는 경우에 대해서는 '사용자'는 '근로자'를 징계위원회에 회부하여 징계위원회 결정에 따라 처리한다.</p>");
+        html.append("  <p style=\"margin-left: 20px;\">1. '근로자'가 직원을 선동하여 업무를 방해하고 불법으로 유인물을 배포할 때.</p>");
+        html.append("  <p style=\"margin-left: 20px;\">2. '근로자'가 무단결근을 계속하여 연속 3일, 월간 5일 또는 년 20일 이상 무단결근한 경우.</p>");
+        html.append("  <p style=\"margin-left: 20px;\">3. '근로자'가 근무성적 또는 능력이 현저히 불량하여 업무 수행이 불가능하다고 인정될 때.</p>");
+        html.append("  <p style=\"margin-left: 20px;\">4. '사용자'의 허가 없이 '근로자' 문서, 비품, 자산 등을 외부로 반출하거나 대여했을 때.</p>");
+        html.append("  <p style=\"margin-left: 20px;\">5. 기타 이에 준하는 행위를 하였다고 판단될 때.</p>");
+        html.append("  <p>② '근로자'가 30일 전 사직서를 제출하고 후임자에게 인수인계를 완료한 경우.</p>");
         html.append("  <p>③ 제 2조 제②항에서 정한 근로계약기간이 만료된 때.</p>");
         html.append("  <p>④ 제 9조에서 규정한 정년에 도달한 때.</p>");
         html.append("  <p>⑤ 채용조건에 갖춰진 각종 문서의 위조, 변조 또는 허위사실이 발견되었을 때.</p>");
@@ -793,12 +868,12 @@ public class HtmlPdfRenderer {
 
         html.append("<div class=\"clause\">");
         html.append("  <h3>제 12 조 【손해배상】</h3>");
-        html.append("  <p>다음 각 호의 1에 해당하는 경우에는 \"근로자\"는 \"사용자\"에게 손해를 배상하여야 한다.</p>");
-        html.append("  <p>① \"근로자\"가 고의 또는 과실로 \"사용자\"에게 손해를 끼친 경우.</p>");
+        html.append("  <p>다음 각 호의 1에 해당하는 경우에는 '근로자'는 '사용자'에게 손해를 배상하여야 한다.</p>");
+        html.append("  <p>① '근로자'가 고의 또는 과실로 '사용자'에게 손해를 끼친 경우.</p>");
         html.append("</div>");
 
         // Page 3 Signature
-        html.append("<div class=\"signature-section\" style=\"display: flex; align-items: center; justify-content: flex-end; margin-top: 20px;\">");
+        html.append("<div style=\"text-align: right; margin-top: 10px;\">");
         html.append("<span class=\"signature-label\" style=\"margin-right: 10px; line-height: 1.4; display: inline-block; vertical-align: middle;\">확인 :</span>");
 
         if (formData.signatures != null && formData.signatures.containsKey("page3")) {
@@ -827,16 +902,17 @@ public class HtmlPdfRenderer {
 
         // --- Page 4 Content ---
         // JSX의 <></> React.Fragment는 HTML 태그가 아니므로 직접 contract-content로 시작합니다.
+        html.append("<div class=\"page-break\"></div>");
         html.append("<div class=\"contract-content\">");
         html.append("                <div class=\"clause\">");
         html.append("                    <p>");
-        html.append("                        ② '근로자'가 재직 중 또는 퇴직 후라도 병원, 관련 회사 및 업무상 관계자에 대한 기밀 정보를 누설한 경우");
+        html.append("                        ② '근로자'가 재직 중 또는 퇴직 후라도 병원, 관련 회사 및 업무상 관계자에 대한 기밀 정보를 누설한 경우.");
         html.append("                    </p>");
         html.append("                    <p>");
-        html.append("                        ③ '근로자'가 병원에 근무 중 얻은 비밀 정보나 지식을 이용하여 병원 및 관련 회사에 손해를 끼친 경우");
+        html.append("                        ③ '근로자'가 병원에 근무 중 얻은 비밀 정보나 지식을 이용하여 병원 및 관련 회사에 손해를 끼친 경우.");
         html.append("                    </p>");
         html.append("                    <p>");
-        html.append("                        ④ '사용자'의 사직서 수리 전에 퇴사함으로 써 병원에 손해를 끼친 경우");
+        html.append("                        ④ '사용자'의 사직서 수리 전에 퇴사함으로써 병원에 손해를 끼친 경우.");
         html.append("                    </p>");
         html.append("                </div>"); // clause 닫기
 
@@ -876,7 +952,7 @@ public class HtmlPdfRenderer {
         html.append("<p style=\"font-size: 10px;\">위 내용을 충분히 숙지하고 개인정보의 수집 및 이용에 대하여 동의합니다.</p>");
 
 // 체크박스 섹션
-        html.append("<div class=\"checkbox-section\" style=\"display: flex; margin-top: 8px; align-items: center;\">");
+        html.append("<div class=\"checkbox-section\" style=\"float: none; display: flex; margin-top: 8px; align-items: center;\">");
 
 // Page 4 동의 상태 가져오기
         String page4Agreement = getAgreementSymbol(formData.getAgreements(), "page4");
@@ -977,7 +1053,7 @@ public class HtmlPdfRenderer {
                     // min-width 제거
                     html.append("                            <span style=\"text-align: center; margin-right: 10px;\">").append(Objects.toString(formData.employeeName, "")).append("</span>");
                     if (sig.isSigned && sig.imageUrl != null && !sig.imageUrl.isEmpty()) {
-                        html.append("                            <img src=\"").append(sig.imageUrl).append("\" alt=\"서명\" style=\"height: 30px; display: inline-block; vertical-align: middle;\"/>");
+                        html.append("                            <img src=\"").append(sig.imageUrl).append("\" alt=\"서명\" class=\"signature-image\" style=\"display: inline-block; vertical-align: middle;\"/>");
                     } else {
                         html.append("                            <span style=\"vertical-align: middle;\">(서명/인)</span>");
                     }
@@ -1001,57 +1077,50 @@ public class HtmlPdfRenderer {
         html.append("                        <span>작성일자: </span>");
         // 작성일자 input을 static span으로 변환
         String createdDateStr;
-        if (employmentContract != null && employmentContract.getCreatedAt() != null) {
-            // employmentContract의 createdAt 사용
+        if (formData.contractSignDate != null && !formData.contractSignDate.isEmpty()) {
+            // contractSignDate가 있으면 사용
+            createdDateStr = formData.contractSignDate;
+        } else if (employmentContract != null && employmentContract.getCreatedAt() != null) {
+            // contractSignDate가 없으면 createdAt 사용 (하위 호환성)
             LocalDate date = employmentContract.getCreatedAt().toLocalDate();
             createdDateStr = date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
-        } else if (formData.writtenDate != null && !Objects.toString(formData.writtenDate, "").isEmpty()) {
-            // fallback: formData.writtenDate 사용
-            LocalDate date = null;
-            String writtenDateVal = Objects.toString(formData.writtenDate, "");
-            try {
-                // "yyyy-MM-dd" 형식으로 파싱 시도
-                date = LocalDate.parse(writtenDateVal, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
-            } catch (Exception e) {
-                try {
-                    // "yyyy년 MM월 dd일" 형식으로 파싱 시도
-                    date = LocalDate.parse(writtenDateVal, DateTimeFormatter.ofPattern("yyyy년 MM월 dd일"));
-                } catch (Exception e2) {
-                    // 파싱 실패 시 현재 날짜 사용
-                    date = LocalDate.now();
-                }
-            }
-            createdDateStr = date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
         } else {
-            // 둘 다 없는 경우 현재 날짜 사용
+            // 둘 다 없으면 현재 날짜
             createdDateStr = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
         }
         html.append("                        <span class=\"input\" style=\"border:none; margin-left:10px; font-size: 12px;\">").append(createdDateStr).append("</span>");
         html.append("                    </div>");
 
-        // 2. 회사 서명 (오른쪽 정렬된 독립 div)
-        html.append("    <div style=\"text-align: right; margin-bottom: 15px; line-height: 1.4;\">");
-        html.append("        <span style=\"font-weight: bold;\">회사 : 선한병원 대표원장 최민선외 6명</span>");
-// 이름과 서명 이미지를 감싸는 새로운 Flexbox 컨테이너
-        html.append("        <span style=\"display: inline-flex; align-items: center; justify-content: flex-end;\">");
-        // 이미지 파일을 Base64로 변환하여 HTML에 직접 삽입
+        html.append("    <div style=\"text-align: right; margin-bottom: 15px;\">");
+        html.append("        <div style=\"display: inline-block; position: relative; padding-left: 50px;\">");
+// 회사: 부분 (절대 위치)
+        html.append("            <span style=\"position: absolute; left: -50px; top: 50%; transform: translateY(-50%); white-space: nowrap;\">회 사 :</span>");
+// 텍스트 부분 (절대 위치)
+        html.append("            <div style=\"position: absolute; left: 0px; top: 50%; transform: translateY(-50%); text-align: left;\">");
+        html.append("                <div style=\"font-weight: bold;\">선한병원</div>");
+        html.append("                <div style=\"white-space: nowrap; font-weight: bold;\">대표원장</div>");
+        html.append("                <span style=\"position: absolute; left: 60px; top: 50%; transform: translateY(-50%); font-weight: bold; white-space: nowrap;\">최민선외 6명</span>");
+        html.append("            </div>");
+// 직인 부분 (상대 위치 유지)
+        html.append("            <div style=\"display: inline-block; margin-left: 90px;\">");
+// 이미지 파일을 Base64로 변환하여 HTML에 직접 삽입
         try {
-            // "resources" 폴더 내의 경로를 사용
             InputStream imageStream = HtmlPdfRenderer.class.getClassLoader().getResourceAsStream("images/선한병원직인.png");
             if (imageStream != null) {
                 byte[] imageBytes = imageStream.readAllBytes();
                 String base64Image = Base64.getEncoder().encodeToString(imageBytes);
-                // Base64 데이터를 이미지 소스로 사용
-                html.append("        <img src=\"data:image/png;base64,").append(base64Image).append("\" alt=\"대표 서명\" style=\"height: 40px; margin-left: 10px; transform: translateY(10px);\"/>");
+                // 2.4cm = 약 90.7px (1cm = 37.8px)
+                html.append("                <img src=\"data:image/png;base64,").append(base64Image).append("\" alt=\"대표 서명\" style=\"width: 91px; height: 91px;\"/>");
             } else {
                 log.error("Image file 'images/선한병원직인.png' not found in resources.");
-                html.append("        <span style=\"margin-left: 15px; font-weight: normal;\">(서명 또는 인)</span>");
+                html.append("                <span style=\"font-weight: normal;\">(서명 또는 인)</span>");
             }
         } catch (IOException e) {
             log.error("Error reading image file: " + e.getMessage(), e);
-            html.append("        <span style=\"margin-left: 15px; font-weight: normal;\">(서명 또는 인)</span>");
+            html.append("                <span style=\"font-weight: normal;\">(서명 또는 인)</span>");
         }
-        html.append("        </span>"); // Flexbox 컨테이너 닫기
+        html.append("            </div>");
+        html.append("        </div>");
         html.append("    </div>");
 
         html.append("                        <div style=\"text-align: right; width: 100%;\">");

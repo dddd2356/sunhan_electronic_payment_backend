@@ -126,9 +126,6 @@ public class VacationService {
     /**
      * ✅ 특정 연도의 휴가 현황 조회
      */
-    /**
-     * ✅ 특정 연도의 휴가 현황 조회
-     */
     @Transactional(readOnly = true)
     public VacationStatusResponseDto getVacationStatus(String userId, Integer year) {
         // ✅ final 변수로 선언
@@ -139,10 +136,25 @@ public class VacationService {
 
         UserAnnualVacationHistory history = vacationHistoryRepository
                 .findByUserIdAndYear(userId, targetYear)
-                .orElseGet(() -> {
-                    log.info("사용자 {}의 {}년 휴가 데이터 자동 생성", userId, targetYear);
-                    return vacationYearService.initializeUserYearVacation(userId, targetYear);
-                });
+                .orElse(null);
+
+        if (history == null) {
+            log.info("사용자 {}의 {}년 휴가 데이터 자동 생성 시도", userId, targetYear);
+            try {
+                history = vacationYearService.initializeUserYearVacation(userId, targetYear);
+            } catch (Exception e) {  // 모든 예외 catch (중복 키 포함)
+                log.warn("연차 초기화 실패 → 기본값 사용: userId={}, year={}", userId, targetYear, e);
+                // 더 이상 DB 작업 하지 않고 기본값 반환
+                history = UserAnnualVacationHistory.builder()
+                        .userId(userId)
+                        .year(targetYear)
+                        .carryoverDays(0.0)
+                        .regularDays(0.0)
+                        .usedCarryoverDays(0.0)
+                        .usedRegularDays(0.0)
+                        .build();
+            }
+        }
 
         String deptName = getDepartmentName(user);
 
