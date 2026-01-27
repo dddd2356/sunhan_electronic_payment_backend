@@ -10,7 +10,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
-import sunhan.sunhanbackend.config.DepartmentProperties;
 import sunhan.sunhanbackend.dto.response.VacationStatusResponseDto;
 import sunhan.sunhanbackend.entity.mysql.Department;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;

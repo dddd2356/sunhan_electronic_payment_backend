@@ -515,6 +515,27 @@ public class FormService {
 
             JsonNode jsonNode = objectMapper.readTree(formDataJson);
 
+            // ✅ 추가: workingHours, salaryMonths 기본값 처리
+            if (jsonNode instanceof ObjectNode) {
+                ObjectNode objectNode = (ObjectNode) jsonNode;
+
+                // workingHours 체크 및 기본값 설정
+                String workingHours = objectNode.has("workingHours")
+                        ? objectNode.get("workingHours").asText("").trim()
+                        : "";
+                if (workingHours.isEmpty()) {
+                    objectNode.put("workingHours", "209");
+                }
+
+                // salaryMonths 체크 및 기본값 설정
+                String salaryMonths = objectNode.has("salaryMonths")
+                        ? objectNode.get("salaryMonths").asText("").trim()
+                        : "";
+                if (salaryMonths.isEmpty()) {
+                    objectNode.put("salaryMonths", "12");
+                }
+            }
+
             Optional<UserEntity> ceoOpt = userRepository.findFirstByJobLevel("5");
             if (ceoOpt.isPresent()) {
                 UserEntity ceo = ceoOpt.get();

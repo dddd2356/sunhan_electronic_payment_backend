@@ -31,7 +31,15 @@ public interface ApprovalLineRepository extends JpaRepository<ApprovalLine, Long
 
     // 문서 타입별 활성화된 결재라인 조회 (삭제되지 않은 것만)
     List<ApprovalLine> findByDocumentTypeAndIsActiveTrueAndIsDeletedFalse(DocumentType documentType);
-
+    @Query("SELECT DISTINCT al FROM ApprovalLine al " +
+            "LEFT JOIN FETCH al.steps " +
+            "WHERE al.documentType = :documentType " +
+            "AND al.isActive = true " +
+            "AND al.isDeleted = false " +
+            "ORDER BY al.createdAt DESC")
+    List<ApprovalLine> findByDocumentTypeAndIsActiveTrueAndIsDeletedFalseWithSteps(
+            @Param("documentType") DocumentType documentType
+    );
     // 생성자별 결재라인 조회 (삭제되지 않은 것만)
     @Query("SELECT al FROM ApprovalLine al LEFT JOIN FETCH al.steps s " +
             "WHERE al.documentType = :documentType AND al.createdBy = :createdBy AND al.isDeleted = false " +

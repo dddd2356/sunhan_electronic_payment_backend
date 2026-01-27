@@ -13,6 +13,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import sunhan.sunhanbackend.dto.request.ResetPasswordRequest;
 import sunhan.sunhanbackend.dto.request.UpdateUserFlagRequestDto;
+import sunhan.sunhanbackend.dto.request.auth.UserRegistrationDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByConditionDto;
 import sunhan.sunhanbackend.dto.request.permissions.GrantRoleByUserIdDto;
 import sunhan.sunhanbackend.dto.request.permissions.UpdateJobLevelRequestDto;
@@ -570,6 +571,100 @@ public class AdminController {
         } catch (Exception e) {
             log.error("비밀번호 변경 실패", e);
             return ResponseEntity.badRequest()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 신규 회원 등록 (MANAGE_USERS 권한 필요)
+     */
+    @PostMapping("/users/register")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> registerUser(
+            @RequestBody UserRegistrationDto dto,
+            Authentication authentication
+    ) {
+        try {
+            String adminUserId = (String) authentication.getPrincipal();
+
+            // 권한 체크
+            Set<PermissionType> permissions = permissionService.getAllUserPermissions(adminUserId);
+            if (!permissions.contains(PermissionType.MANAGE_USERS)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "회원 등록 권한이 없습니다."));
+            }
+
+            UserEntity newUser = userService.registerUser(dto);
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "회원 등록이 완료되었습니다.",
+                    "userId", newUser.getUserId(),
+                    "userName", newUser.getUserName()
+            ));
+
+        } catch (Exception e) {
+            log.error("회원 등록 실패", e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 사용자 부서 변경 (인사이동)
+     */
+    @PutMapping("/users/{userId}/department")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> changeUserDepartment(
+            @PathVariable String userId,
+            @RequestBody Map<String, String> request,
+            Authentication authentication
+    ) {
+        try {
+            String adminUserId = (String) authentication.getPrincipal();
+            String newDeptCode = request.get("deptCode");
+
+            if (newDeptCode == null || newDeptCode.trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "부서 코드를 입력해주세요."));
+            }
+
+            UserEntity updatedUser = userService.changeUserDepartment(adminUserId, userId, newDeptCode);
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "부서가 변경되었습니다.",
+                    "userId", updatedUser.getUserId(),
+                    "newDeptCode", updatedUser.getDeptCode()
+            ));
+
+        } catch (Exception e) {
+            log.error("부서 변경 실패", e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 사용자 활성/비활성 상태 변경
+     */
+    @PutMapping("/users/{userId}/toggle-status")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> toggleUserStatus(
+            @PathVariable String userId,
+            Authentication authentication
+    ) {
+        try {
+            String adminUserId = (String) authentication.getPrincipal();
+            UserEntity updatedUser = userService.toggleUserStatus(adminUserId, userId);
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "사용자 상태가 변경되었습니다.",
+                    "userId", updatedUser.getUserId(),
+                    "useFlag", updatedUser.getUseFlag()
+            ));
+
+        } catch (Exception e) {
+            log.error("사용자 상태 변경 실패", e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("error", e.getMessage()));
         }
     }

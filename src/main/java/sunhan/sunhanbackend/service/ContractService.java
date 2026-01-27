@@ -425,11 +425,13 @@ public class ContractService {
                     formData.set("breakTimeList", breakTimeList);
                 }
 
-                if (!formData.has("workingHours")) {
+                if (!formData.has("workingHours") ||
+                        formData.get("workingHours").asText("").trim().isEmpty()) {
                     formData.put("workingHours", "209");
                 }
 
-                if (!formData.has("salaryMonths")) {
+                if (!formData.has("salaryMonths") ||
+                        formData.get("salaryMonths").asText("").trim().isEmpty()) {
                     formData.put("salaryMonths", "12");
                 }
 

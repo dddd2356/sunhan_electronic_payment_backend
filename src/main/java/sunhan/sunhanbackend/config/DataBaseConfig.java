@@ -63,44 +63,6 @@ public class DataBaseConfig {
         return new JpaTransactionManager(emf.getObject());
     }
 
-    // Oracle 설정
-    @Bean
-    @ConfigurationProperties("spring.datasource.oracle")
-    public DataSourceProperties oracleDataSourceProperties() {
-        return new DataSourceProperties();
-    }
-
-    @Bean(name = "oracleDataSource")
-    public DataSource oracleDataSource() {
-        return oracleDataSourceProperties()
-                .initializeDataSourceBuilder()
-                .build();
-    }
-
-    @Bean(name = "oracleEntityManagerFactory")
-    public LocalContainerEntityManagerFactoryBean oracleEntityManagerFactory(
-            EntityManagerFactoryBuilder builder,
-            @Qualifier("oracleDataSource") DataSource dataSource) {
-
-        Map<String, Object> properties = new HashMap<>();
-        properties.put("hibernate.dialect", "org.hibernate.dialect.OracleDialect");
-        properties.put("hibernate.hbm2ddl.auto", "none");
-        properties.put("hibernate.show_sql", "true");
-
-        return builder
-                .dataSource(dataSource)
-                .packages("sunhan.sunhanbackend.entity.oracle")
-                .persistenceUnit("oracle")
-                .properties(properties)
-                .build();
-    }
-
-    @Bean(name = "oracleTransactionManager")
-    public PlatformTransactionManager oracleTransactionManager(
-            @Qualifier("oracleEntityManagerFactory") LocalContainerEntityManagerFactoryBean emf) {
-        return new JpaTransactionManager(emf.getObject());
-    }
-
     // MySQL Repository 설정
     @Configuration
     @EnableJpaRepositories(
@@ -109,15 +71,5 @@ public class DataBaseConfig {
             transactionManagerRef = "mysqlTransactionManager"
     )
     static class MySqlRepositoryConfig {
-    }
-
-    // Oracle Repository 설정
-    @Configuration
-    @EnableJpaRepositories(
-            basePackages = "sunhan.sunhanbackend.repository.oracle",
-            entityManagerFactoryRef = "oracleEntityManagerFactory",
-            transactionManagerRef = "oracleTransactionManager"
-    )
-    static class OracleRepositoryConfig {
     }
 }

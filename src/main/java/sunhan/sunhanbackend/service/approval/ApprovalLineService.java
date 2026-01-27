@@ -83,8 +83,6 @@ public class ApprovalLineService {
             step.setJobLevel(stepDto.getJobLevel());
             step.setDeptCode(stepDto.getDeptCode());
             step.setIsOptional(stepDto.getIsOptional());
-//            step.setCanSkip(stepDto.getCanSkip());
-//            step.setIsFinalApprovalAvailable(stepDto.getIsFinalApprovalAvailable());
 
             approvalStepRepository.save(step);
         }
@@ -97,7 +95,7 @@ public class ApprovalLineService {
      */
     @Transactional(readOnly = true)
     public List<ApprovalLine> getAvailableApprovalLines(DocumentType documentType, String userId) {
-        return approvalLineRepository.findByDocumentTypeAndIsActiveTrueAndIsDeletedFalse(documentType);
+        return approvalLineRepository.findByDocumentTypeAndIsActiveTrueAndIsDeletedFalseWithSteps(documentType);
     }
 
     /**
@@ -105,7 +103,7 @@ public class ApprovalLineService {
      */
     @Transactional(readOnly = true)
     public ApprovalLine getApprovalLineDetail(Long approvalLineId) {
-        return approvalLineRepository.findById(approvalLineId)
+        return approvalLineRepository.findByIdWithSteps(approvalLineId)
                 .orElseThrow(() -> new EntityNotFoundException("결재라인을 찾을 수 없습니다."));
     }
 
@@ -153,8 +151,6 @@ public class ApprovalLineService {
                 step.setJobLevel(stepDto.getJobLevel());
                 step.setDeptCode(stepDto.getDeptCode());
                 step.setIsOptional(Boolean.TRUE.equals(stepDto.getIsOptional()));
-//                step.setCanSkip(Boolean.TRUE.equals(stepDto.getCanSkip()));
-//                step.setIsFinalApprovalAvailable(Boolean.TRUE.equals(stepDto.getIsFinalApprovalAvailable()));
                 existing.getSteps().add(step);
             }
         }

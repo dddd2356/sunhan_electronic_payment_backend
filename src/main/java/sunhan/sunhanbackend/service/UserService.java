@@ -14,9 +14,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import sunhan.sunhanbackend.dto.request.auth.UserRegistrationDto;
 import sunhan.sunhanbackend.dto.response.*;
 import sunhan.sunhanbackend.entity.mysql.UserEntity;
-import sunhan.sunhanbackend.entity.oracle.OracleEntity;
 import sunhan.sunhanbackend.enums.PermissionType;
 import sunhan.sunhanbackend.enums.Role;
 import sunhan.sunhanbackend.repository.mysql.DepartmentRepository;
@@ -42,7 +42,6 @@ import java.util.stream.Stream;
 public class UserService {
 
     private final UserRepository userRepository;
-    private final OracleService oracleService;
     private final PasswordEncoder passwdEncoder;
     private final PermissionService permissionService;
     private final VacationService vacationService;
@@ -52,9 +51,8 @@ public class UserService {
     private String uploadDir;  // "/uploads/signatures/"
 
     @Autowired
-    public UserService(UserRepository userRepository, OracleService oracleService, PasswordEncoder passwdEncoder, PermissionService permissionService, DepartmentRepository departmentRepository, @Lazy VacationService vacationService) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwdEncoder, PermissionService permissionService, DepartmentRepository departmentRepository, @Lazy VacationService vacationService) {
         this.userRepository = userRepository;
-        this.oracleService = oracleService;
         this.passwdEncoder = passwdEncoder;
         this.permissionService = permissionService;
         this.departmentRepository = departmentRepository;
@@ -182,18 +180,13 @@ public class UserService {
     }
 
     /**
-     * 로그인 인증 메서드
-     * 1) MySQL에 사용자가 있는지 확인
-     * 2) 있으면 BCrypt 검사
-     * 3) 없으면, 입력한 비밀번호가 userId와 동일하고 Oracle에 존재할 경우
-     *    Oracle에서 유저 정보 가져와 MySQL에 저장 → 인증 성공
-     *    🔧 로그인 인증 - 성능 최적화
+     * 로그인 인증 메서드 (Oracle 마이그레이션 로직 제거)
      */
     @Transactional
     public boolean authenticateUser(String userId, String password) {
         // 1. 'administrator' 계정 예외 처리
         if ("administrator".equalsIgnoreCase(userId)) {
-            log.info("administrator 로그인: Oracle 동기화 과정을 건너뜁니다.");
+            log.info("administrator 로그인 시도");
             Optional<UserEntity> adminUser = userRepository.findByUserId(userId);
             if (adminUser.isPresent()) {
                 boolean matches = passwdEncoder.matches(password, adminUser.get().getPasswd());
@@ -205,102 +198,25 @@ public class UserService {
             }
         }
 
-        // 2. MySQL에 사용자가 존재하는지 확인
+        // 2. MySQL에서 사용자 조회
         Optional<UserEntity> userOpt = userRepository.findByUserId(userId);
-
-        if (userOpt.isPresent()) {
-            UserEntity user = userOpt.get();
-
-            try {
-                OracleEntity oracleUser = oracleService.getOracleUserInfo(userId);
-
-                boolean needsUpdate = false;
-
-                if (!Objects.equals(user.getUseFlag(), oracleUser.getUseFlag())) {
-                    user.setUseFlag(oracleUser.getUseFlag());
-                    needsUpdate = true;
-                }
-
-                if (!Objects.equals(user.getUserName(), oracleUser.getUsrKorName())) {
-                    user.setUserName(oracleUser.getUsrKorName());
-                    needsUpdate = true;
-                }
-
-                if (!Objects.equals(user.getDeptCode(), oracleUser.getDeptCode())) {
-                    user.setDeptCode(oracleUser.getDeptCode());
-                    needsUpdate = true;
-                }
-
-                if (!Objects.equals(user.getJobType(), oracleUser.getJobType())) {
-                    user.setJobType(oracleUser.getJobType());
-                    needsUpdate = true;
-                }
-
-                LocalDate oracleStartDate = DateUtil.parseOracleDate(oracleUser.getStartDate());
-                if (!Objects.equals(user.getStartDate(), oracleStartDate)) {
-                    user.setStartDate(oracleStartDate);
-                    needsUpdate = true;
-                }
-
-                if (needsUpdate) {
-                    log.info("Oracle의 정보가 MySQL과 다릅니다. 사용자 {}의 정보를 동기화합니다.", userId);
-                    userRepository.saveAndFlush(user);
-                }
-
-                if (!"1".equals(oracleUser.getUseFlag())) {
-                    log.warn("사용자 {}의 로그인이 차단되었습니다. Oracle상 비활성 상태입니다.", userId);
-                    return false;
-                }
-
-            } catch (Exception e) {
-                log.error("로그인 중 Oracle DB 동기화 실패: {}. 로그인 프로세스를 중단합니다.", userId, e);
-                return false;
-            }
-
-            boolean result = passwdEncoder.matches(password, user.getPasswd());
-            log.info("✅ 기존 사용자 인증 결과 ({}): {}", userId, result);
-            return result;
-
-        } else {
-            // 3. MySQL에 없으면 Oracle 마이그레이션
-            if (password.equals(userId) && oracleService.isUserExistsInOracle(userId)) {
-                try {
-                    String encodedPasswordForMigration = passwdEncoder.encode(password);
-
-                    // ✅ 마이그레이션 전 한 번 더 체크
-                    if (userRepository.existsById(userId)) {
-                        log.warn("⚠️ 마이그레이션 직전 중복 감지: {}", userId);
-                        UserEntity existing = userRepository.findByUserId(userId).get();
-                        return passwdEncoder.matches(password, existing.getPasswd());
-                    }
-
-                    // ✅ 마이그레이션 실행 후 즉시 flush
-                    UserEntity migratedUser = oracleService.migrateUserFromOracle(userId, encodedPasswordForMigration);
-                    userRepository.flush(); // ✅ 강제 DB 동기화
-
-                    log.info("✅ [첫 로그인] Oracle 유저 '{}' MySQL 마이그레이션 완료 (ID: {})",
-                            userId, migratedUser.getUserId());
-
-                    return true;
-
-                } catch (org.springframework.dao.DataIntegrityViolationException e) {
-                    log.error("❌ 중복 키 오류로 마이그레이션 실패: {}. 기존 계정으로 로그인 시도", userId);
-                    userRepository.flush(); // ✅ 에러 발생 시에도 flush
-
-                    Optional<UserEntity> existing = userRepository.findByUserId(userId);
-                    if (existing.isPresent()) {
-                        return passwdEncoder.matches(password, existing.get().getPasswd());
-                    }
-                    return false;
-                } catch (Exception e) {
-                    log.error("❌ Oracle 유저 마이그레이션 실패: {}", userId, e);
-                    return false;
-                }
-            }
+        if (userOpt.isEmpty()) {
+            log.warn("❌ 존재하지 않는 사용자: {}", userId);
+            return false;
         }
 
-        log.warn("❌ 인증 실패: {} (비밀번호 불일치 또는 Oracle에 없음)", userId);
-        return false;
+        UserEntity user = userOpt.get();
+
+        // 3. useFlag 체크
+        if (!"1".equals(user.getUseFlag())) {
+            log.warn("❌ 비활성 사용자: {}", userId);
+            return false;
+        }
+
+        // 4. 비밀번호 검증
+        boolean result = passwdEncoder.matches(password, user.getPasswd());
+        log.info("✅ 사용자 인증 결과 ({}): {}", userId, result);
+        return result;
     }
 
     /**
@@ -1047,5 +963,115 @@ public class UserService {
                 userPage.getNumber(),
                 userPage.getSize()
         );
+    }
+
+    /**
+     * 회원 등록 (관리자 전용)
+     * - 초기 비밀번호는 사원번호와 동일하게 설정
+     * - jobLevel은 기본값 "0"으로 설정 (나중에 관리자가 변경 가능)
+     * - passwordChangeRequired = true 설정
+     */
+    @Transactional
+    @CacheEvict(value = {"userCache", "userRoleCache"}, allEntries = true)
+    public UserEntity registerUser(UserRegistrationDto dto) {
+        // 1. 중복 체크
+        if (userRepository.existsById(dto.getUsrId())) {
+            throw new RuntimeException("이미 등록된 사원번호입니다: " + dto.getUsrId());
+        }
+
+        // 2. 부서 존재 여부 확인
+        if (!departmentRepository.existsById(dto.getDeptCode())) {
+            throw new RuntimeException("존재하지 않는 부서코드입니다: " + dto.getDeptCode());
+        }
+
+        // 3. 새 사용자 엔티티 생성
+        UserEntity newUser = new UserEntity();
+        newUser.setUserId(dto.getUsrId());
+        newUser.setUserName(dto.getUsrKorName());
+        newUser.setDeptCode(dto.getDeptCode());
+        newUser.setJobType(dto.getJobType());
+        newUser.setJobLevel("0"); // ✅ 기본값: 일반 사원
+        newUser.setStartDate(dto.getStartDate());
+        newUser.setUseFlag("1"); // 기본값: 활성
+
+        // 4. 초기 비밀번호 설정 (사원번호와 동일)
+        String encodedPassword = passwdEncoder.encode(dto.getUsrId());
+        newUser.setPasswd(encodedPassword);
+        newUser.setPasswordChangeRequired(true);
+
+        // 5. 기본 권한 설정
+        newUser.setRole(Role.USER);
+
+        // 6. 저장
+        UserEntity savedUser = userRepository.saveAndFlush(newUser);
+        log.info("✅ 신규 사용자 등록 완료: userId={}, name={}, jobLevel=0",
+                savedUser.getUserId(), savedUser.getUserName());
+
+        return savedUser;
+    }
+
+    /**
+     * 사용자 부서 변경 (인사이동)
+     */
+    @Transactional
+    @CacheEvict(value = {"userCache", "deptCache"}, allEntries = true)
+    public UserEntity changeUserDepartment(String adminUserId, String targetUserId, String newDeptCode) {
+        // 권한 체크
+        UserEntity admin = getUserInfo(adminUserId);
+        if (!admin.isAdmin()) {
+            throw new RuntimeException("부서 변경 권한이 없습니다.");
+        }
+
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(adminUserId);
+        if (!permissions.contains(PermissionType.MANAGE_USERS)) {
+            throw new RuntimeException("부서 변경 권한이 없습니다.");
+        }
+
+        // 대상 사용자 조회
+        UserEntity targetUser = userRepository.findByUserId(targetUserId)
+                .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다: " + targetUserId));
+
+        // 부서 존재 여부 확인
+        if (!departmentRepository.existsById(newDeptCode)) {
+            throw new RuntimeException("존재하지 않는 부서코드입니다: " + newDeptCode);
+        }
+
+        String oldDeptCode = targetUser.getDeptCode();
+        targetUser.setDeptCode(newDeptCode);
+
+        UserEntity savedUser = userRepository.saveAndFlush(targetUser);
+        log.info("✅ 부서 변경 완료: userId={}, {} → {}", targetUserId, oldDeptCode, newDeptCode);
+
+        return savedUser;
+    }
+
+    /**
+     * 사용자 활성/비활성 상태 변경
+     */
+    @Transactional
+    @CacheEvict(value = {"userCache"}, key = "#targetUserId")
+    public UserEntity toggleUserStatus(String adminUserId, String targetUserId) {
+        // 권한 체크
+        UserEntity admin = getUserInfo(adminUserId);
+        if (!admin.isAdmin()) {
+            throw new RuntimeException("사용자 상태 변경 권한이 없습니다.");
+        }
+
+        Set<PermissionType> permissions = permissionService.getAllUserPermissions(adminUserId);
+        if (!permissions.contains(PermissionType.MANAGE_USERS)) {
+            throw new RuntimeException("사용자 상태 변경 권한이 없습니다.");
+        }
+
+        UserEntity targetUser = userRepository.findByUserId(targetUserId)
+                .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다: " + targetUserId));
+
+        // 상태 토글
+        String newStatus = "1".equals(targetUser.getUseFlag()) ? "0" : "1";
+        targetUser.setUseFlag(newStatus);
+
+        UserEntity savedUser = userRepository.saveAndFlush(targetUser);
+        log.info("✅ 사용자 상태 변경: userId={}, useFlag={}", targetUserId, newStatus);
+
+        return savedUser;
     }
 }
