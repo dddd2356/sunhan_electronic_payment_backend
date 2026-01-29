@@ -13,6 +13,4 @@ public class ApprovalStepDto {
     private String deptCode;
 
     private Boolean isOptional = false;
-//    private Boolean canSkip = false;
-//    private Boolean isFinalApprovalAvailable = false;
 }

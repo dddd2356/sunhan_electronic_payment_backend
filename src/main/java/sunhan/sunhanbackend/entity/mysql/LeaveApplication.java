@@ -7,7 +7,6 @@ import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 import sunhan.sunhanbackend.entity.mysql.approval.ApprovalLine;
-import sunhan.sunhanbackend.entity.mysql.approval.DocumentApprovalProcess;
 import sunhan.sunhanbackend.enums.LeaveApplicationStatus;
 import sunhan.sunhanbackend.enums.LeaveType;
 

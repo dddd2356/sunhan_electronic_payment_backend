@@ -132,7 +132,7 @@ public class LeaveApplicationController {
     @PutMapping("/{id}/substitute")
     public ResponseEntity<?> updateSubstitute(
             @PathVariable Long id,
-            @RequestBody LeaveApplicationUpdateFormRequestDto.SubstituteInfo substituteDto,
+            @RequestBody LeaveApplicationUpdateFormRequestDto.UserInfo substituteDto,  // ✅ UserInfo로 수정
             Authentication auth) {
         String userId = auth.getName();
         try {
@@ -180,7 +180,7 @@ public class LeaveApplicationController {
         try {
             String userId = auth.getName();
 
-            // 결재라인 ID 추출 (선택적)
+            // ✅ 1. 결재라인 ID 추출
             Long approvalLineId = null;
             if (requestBody != null && requestBody.containsKey("approvalLineId")) {
                 Object lineIdObj = requestBody.get("approvalLineId");
@@ -197,10 +197,44 @@ public class LeaveApplicationController {
                 }
             }
 
-            // 서비스 호출
+            // ✅ 2. substituteInfo 추출 및 변환
+            LeaveApplicationUpdateFormRequestDto.UserInfo substituteInfo = null;
+            if (requestBody != null && requestBody.containsKey("substituteInfo")) {
+                Object substituteObj = requestBody.get("substituteInfo");
+                if (substituteObj != null) {
+                    try {
+                        substituteInfo = objectMapper.convertValue(
+                                substituteObj,
+                                LeaveApplicationUpdateFormRequestDto.UserInfo.class
+                        );
+                    } catch (Exception e) {
+                        log.warn("substituteInfo 변환 실패: {}", e.getMessage());
+                    }
+                }
+            }
+
+            // ✅ 3. departmentHeadInfo 추출 및 변환
+            LeaveApplicationUpdateFormRequestDto.UserInfo departmentHeadInfo = null;
+            if (requestBody != null && requestBody.containsKey("departmentHeadInfo")) {
+                Object deptHeadObj = requestBody.get("departmentHeadInfo");
+                if (deptHeadObj != null) {
+                    try {
+                        departmentHeadInfo = objectMapper.convertValue(
+                                deptHeadObj,
+                                LeaveApplicationUpdateFormRequestDto.UserInfo.class
+                        );
+                    } catch (Exception e) {
+                        log.warn("departmentHeadInfo 변환 실패: {}", e.getMessage());
+                    }
+                }
+            }
+
+            // ✅ 4. 서비스 호출 (모든 파라미터 전달)
             LeaveApplication submittedApplication = leaveApplicationService.submitLeaveApplication(
                     id,
                     approvalLineId,
+                    substituteInfo,      // ✅ 추가
+                    departmentHeadInfo,  // ✅ 추가
                     userId
             );
 
@@ -646,7 +680,6 @@ public class LeaveApplicationController {
     private boolean canSignAtPosition(Long applicationId, String userId, String signatureType) {
         try {
             LeaveApplication application = leaveApplicationService.getLeaveApplicationEntity(applicationId);
-            UserEntity user = userService.getUserInfo(userId);
 
             // ✅ 신청자 서명은 항상 DRAFT 상태에서만 가능 (결재라인과 무관)
             if ("applicant".equals(signatureType)) {
@@ -659,12 +692,9 @@ public class LeaveApplicationController {
                 return false;
             }
 
-            // ✅ 결재라인 기반인 경우 currentApproverId로 판단
-            if (application.isUsingApprovalLine()) {
-                return userId.equals(application.getCurrentApproverId());
-            }
+            // ✅ 모든 승인자는 currentApproverId로 판단 (isUsingApprovalLine 체크 삭제)
+            return userId.equals(application.getCurrentApproverId());
 
-            return false;
         } catch (Exception e) {
             log.error("서명 권한 체크 실패: applicationId={}, userId={}, signatureType={}",
                     applicationId, userId, signatureType, e);
@@ -673,58 +703,17 @@ public class LeaveApplicationController {
     }
 
     /**
-     * 부서 관리 권한 체크 (부서장이 해당 부서 직원을 관리할 수 있는지)
-     */
-    private boolean canManageDepartment(String managerId, String employeeId) {
-        try {
-            UserEntity manager = userService.getUserInfo(managerId);
-            UserEntity employee = userService.getUserInfo(employeeId);
-
-            // 같은 부서이면서 관리자가 부서장 권한이 있는 경우
-            return manager.getDeptCode().equals(employee.getDeptCode()) &&
-                    manager.getJobLevel() != null &&
-                    Integer.parseInt(manager.getJobLevel()) >= 1;
-
-        } catch (Exception e) {
-            log.error("부서 관리 권한 체크 실패: managerId={}, employeeId={}", managerId, employeeId, e);
-            return false;
-        }
-    }
-
-    /**
      * 대직자 후보 목록 조회
      * 현재 사용자와 같은 부서의 직원들을 반환
      */
+    @Deprecated
     @GetMapping("/substitute-candidates")
     public ResponseEntity<?> getSubstituteCandidates(Authentication auth) {
-        if (auth == null || !auth.isAuthenticated()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-        String userId = auth.getName();
-
-        try {
-            UserEntity currentUser = userService.getUserInfo(userId);
-            if (currentUser == null) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "사용자 정보를 찾을 수 없습니다."));
-            }
-
-            List<UserEntity> allInDept = userService.getActiveUsersByDeptCode(currentUser.getUserId(), currentUser.getDeptCode());
-
-            List<Map<String, Object>> dto = allInDept.stream()
-                    .filter(u -> u.getUserId() != null && !u.getUserId().equals(userId))
-                    .map(u -> {
-                        Map<String, Object> m = new HashMap<>();
-                        m.put("userId", u.getUserId());
-                        m.put("userName", u.getUserName());
-                        m.put("jobLevel", u.getJobLevel());
-                        return m;
-                    })
-                    .collect(Collectors.toList());
-            return ResponseEntity.ok(dto);
-        } catch (Exception e) {
-            log.error("getSubstituteCandidates failed for {}: {}", userId, e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "대직자 후보 조회 중 오류가 발생했습니다."));
-        }
+        return ResponseEntity.status(HttpStatus.GONE)
+                .body(Map.of(
+                        "error", "This endpoint is deprecated. Use OrganizationChart component instead.",
+                        "message", "대직자 선택은 조직도 컴포넌트를 통해 진행해주세요."
+                ));
     }
 
     /**

@@ -15,8 +15,6 @@ public class ApprovalStepResponseDto {
     private String jobLevel;
     private String deptCode;
     private Boolean isOptional;
-//    private Boolean canSkip;
-//    private Boolean isFinalApprovalAvailable;
 
     public static ApprovalStepResponseDto fromEntity(ApprovalStep entity) {
         ApprovalStepResponseDto dto = new ApprovalStepResponseDto();
@@ -28,8 +26,6 @@ public class ApprovalStepResponseDto {
         dto.setJobLevel(entity.getJobLevel());
         dto.setDeptCode(entity.getDeptCode());
         dto.setIsOptional(entity.getIsOptional());
-//        dto.setCanSkip(entity.getCanSkip());
-//        dto.setIsFinalApprovalAvailable(entity.getIsFinalApprovalAvailable());
         return dto;
     }
 }

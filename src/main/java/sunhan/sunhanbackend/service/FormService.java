@@ -347,13 +347,23 @@ public class FormService {
      */
     private void ensureSignatureEntryFromExistingOrDefault(ObjectNode signaturesNode, String role,
                                                            String defaultUserId, Boolean isSigned) {
-        // 이미 서명 데이터가 있고 실제로 서명되어 있다면 그대로 유지
+        // 이미 서명 데이터가 있으면 그대로 유지 (전결처리 포함)
         if (signaturesNode.has(role) && signaturesNode.get(role).isArray()) {
             ArrayNode existingSignatures = (ArrayNode) signaturesNode.get(role);
             if (!existingSignatures.isEmpty()) {
                 JsonNode firstSignature = existingSignatures.get(0);
+
+                // ✅ 추가: "전결처리!" 텍스트가 있으면 무조건 유지
+                if (firstSignature.has("text")) {
+                    String text = firstSignature.get("text").asText("");
+                    if ("전결처리!".equals(text) || "전결처리".equals(text)) {
+                        log.info("{}단계에 전결 표시가 있으므로 기존 데이터 유지", role);
+                        return;
+                    }
+                }
+
+                // ✅ 기존 로직: isSigned=true면 유지
                 if (firstSignature.has("isSigned") && firstSignature.get("isSigned").asBoolean()) {
-                    // 이미 서명이 완료된 데이터가 있으므로 그대로 유지
                     return;
                 }
             }
@@ -362,6 +372,7 @@ public class FormService {
         // 기존 서명이 없거나 완료되지 않은 경우에만 기본값으로 설정
         ensureSignatureEntry(signaturesNode, role, defaultUserId, isSigned);
     }
+
     @Cacheable("formTemplate")
     public String getPublishedForm(ContractType type) {
         String resourcePath;

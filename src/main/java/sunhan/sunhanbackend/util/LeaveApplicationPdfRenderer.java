@@ -3,6 +3,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
 import lombok.extern.slf4j.Slf4j;
+import sunhan.sunhanbackend.entity.mysql.approval.ApprovalStep;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -345,7 +346,11 @@ public class LeaveApplicationPdfRenderer {
                      width: auto; height: auto;
                      object-fit: contain;
          }
-        .signature-image-inline { max-width: 60px; height: auto; vertical-align: middle; }
+        .signature-image-inline {
+            max-width: 60px;
+            height: auto;
+            vertical-align: text-bottom;
+        }
         /* 하단 로고 및 푸터 스타일 */
         .editor-footer {
              text-align: center;
@@ -436,15 +441,25 @@ public class LeaveApplicationPdfRenderer {
         html.append("<tr>");
         String[] approverKeys = {"hrStaff", "centerDirector", "adminDirector", "ceoDirector"};
         String[] approverSteps = {"HR_STAFF_APPROVAL", "CENTER_DIRECTOR_APPROVAL", "ADMIN_DIRECTOR_APPROVAL", "CEO_DIRECTOR_APPROVAL"};
+
+// ✅ 결재라인 정보 가져오기
+        JsonNode approvalLineNode = data.path("approvalLine");
+        JsonNode stepsNode = approvalLineNode.path("steps");
+
         for (int i = 0; i < approverKeys.length; i++) {
-            html.append(generateSignatureCell(
+            log.info("=== 결재 단계 처리 시작: {} ===", approverSteps[i]);
+
+            String signatureCell = generateSignatureCell(
                     signatures.path(approverKeys[i]),
                     data.path("is" + toCamelCase(approverKeys[i]) + "Approved").asBoolean(),
                     isFinalApproved,
                     finalApprovalStep,
                     approverSteps[i],
                     allowShowHigherSignatures
-            ));
+            );
+
+            log.info("generateSignatureCell 결과 길이: {}", signatureCell.length());
+            html.append(signatureCell);
         }
         html.append("</tr>");
 
@@ -544,17 +559,11 @@ public class LeaveApplicationPdfRenderer {
                                                 boolean allowShowHigherSignatures) {
         StringBuilder sb = new StringBuilder("<td class='signature-cell'>");
 
-        // 1) span 스타일 (강제)
         String spanStyle = "color:#ff0000 !important; background-color:transparent !important;"
                 + " font-weight:bold !important; font-size:9px !important;"
                 + " display:inline-block !important; padding:0 2px !important; margin:2px !important; border:none !important;";
 
-        // 2) legacy <font> fallback (일부 구형 렌더러에 유효)
-        String fontStart = "<font color=\"#ff0000\">"; // 닫는 태그로 종료
-
-        // 3) SVG fallback (색 보장이 비교적 확실)
         java.util.function.Function<String, String> makeSvg = text -> {
-            // width/height 조절 필요하면 숫자 변경
             return "<svg xmlns='http://www.w3.org/2000/svg' width='60' height='20' role='img' aria-label='" + text + "'>"
                     + "<rect width='100%' height='100%' fill='transparent'/>"
                     + "<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='#ff0000' "
@@ -563,11 +572,7 @@ public class LeaveApplicationPdfRenderer {
                     + "</text></svg>";
         };
 
-        // HR_FINAL_APPROVAL 특수 처리(기존 로직 유지)
         if ("HR_FINAL_APPROVAL".equals(currentStepForCell)) {
-            boolean isActualFinalApprovalStep = (isFinalApproved && finalApprovalStep != null && finalApprovalStep.equals(currentStepForCell));
-            boolean isHigherThanFinal = (isFinalApproved && finalApprovalStep != null && isHigherStep(finalApprovalStep, currentStepForCell));
-            // 전결 문구 표시 — SVG로도 보냄
             String text = "전결";
             sb.append("<span style='").append(spanStyle).append("'>").append(text).append("</span>");
             sb.append("</td>");
@@ -584,22 +589,23 @@ public class LeaveApplicationPdfRenderer {
             rawText = signatureNode.get(0).path("text").asText(null);
         }
 
+        // ✅✅✅ "전결처리!" 체크를 최우선으로 처리 (SVG 대신 span 사용)
+        if (rawText != null && (rawText.trim().equals("전결처리!") || rawText.trim().equals("전결처리"))) {
+            sb.append("<span style='color:#ff0000; font-weight:bold; font-size:11px;'>전결처리!</span>");
+            sb.append("</td>");
+            return sb.toString();
+        }
+
         String imageUrl = normalizeImageUrl(rawImage);
         boolean isActualFinalApprovalStep = (isFinalApproved && finalApprovalStep != null && finalApprovalStep.equals(currentStepForCell));
         boolean isHigherThanFinal = (isFinalApproved && finalApprovalStep != null && isHigherStep(finalApprovalStep, currentStepForCell));
 
-        // Helper to append text using span->font->svg fallback
         java.util.function.Consumer<String> appendTextWithFallback = txt -> {
             if (txt == null) txt = "";
-            // 1) inline span with !important
             sb.append("<span style='").append(spanStyle).append("'>").append(escapeHtml(txt)).append("</span>");
-            // 2) also include <font> fallback commented (won't break) — uncomment if you want to force
-            // sb.append(fontStart).append(escapeHtml(txt)).append("</font>");
-            // 3) include SVG fallback (uncomment if prefer SVG instead)
-            // sb.append(makeSvg.apply(txt));
         };
 
-        // 우선순위 로직 (기존과 동일)
+        // 우선순위 로직
         if (isHigherThanFinal) {
             if (allowShowHigherSignatures && isSignedByThisPerson) {
                 if (imageUrl != null && !imageUrl.isBlank()) {
@@ -608,7 +614,6 @@ public class LeaveApplicationPdfRenderer {
                     String textToDisplay = (rawText != null && !rawText.isBlank()) ? rawText : "승인";
                     String trimmedText = textToDisplay.trim();
                     if ("전결처리".equals(trimmedText) || "전결".equals(trimmedText)) {
-                        // 전결 문구는 SVG로 확실히
                         sb.append(makeSvg.apply(textToDisplay));
                     } else {
                         appendTextWithFallback.accept(textToDisplay);
@@ -623,7 +628,6 @@ public class LeaveApplicationPdfRenderer {
                     sb.append("<img src='").append(imageUrl).append("' alt='서명' class='signature-image'/>");
                 } else {
                     String textToDisplay = (rawText != null && !rawText.isBlank()) ? rawText : "전결처리";
-                    // 전결/전결처리일땐 SVG로 확실히
                     if ("전결처리".equals(textToDisplay) || "전결".equals(textToDisplay)) {
                         sb.append(makeSvg.apply(textToDisplay));
                     } else {
@@ -679,6 +683,41 @@ public class LeaveApplicationPdfRenderer {
         log.info("currentStepForCell: {}", currentStepForCell);
         log.info("finalApprovalDate(raw): {}", finalApprovalDate);
         log.info("allowShowHigherSignatures: {}", allowShowHigherSignatures);
+
+        // ✅✅✅ 최우선: "전결처리!" 텍스트 체크
+        String rawText = null;
+        if (signatureNode != null && signatureNode.isArray() && signatureNode.size() > 0 && signatureNode.get(0) != null) {
+            rawText = signatureNode.get(0).path("text").asText(null);
+        }
+
+        // "전결처리!"면 해당 날짜 표시
+        if (rawText != null && (rawText.trim().equals("전결처리!") || rawText.trim().equals("전결처리"))) {
+            log.info("전결처리! 텍스트 발견 - 날짜 표시");
+
+            // signatureDate 우선 사용
+            if (signatureNode.get(0).has("signatureDate")) {
+                String sigDate = signatureNode.get(0).path("signatureDate").asText(null);
+                String formatted = formatDateString(sigDate);
+                if (formatted != null) {
+                    log.info("signatureDate 사용: {}", formatted);
+                    sb.append(formatted);
+                    sb.append("</td>");
+                    return sb.toString();
+                }
+            }
+
+            // signatureDate 없으면 finalApprovalDate 사용
+            String finalDateFormatted = formatDateString(finalApprovalDate);
+            if (finalDateFormatted != null) {
+                log.info("finalApprovalDate 사용: {}", finalDateFormatted);
+                sb.append(finalDateFormatted);
+            } else {
+                log.info("날짜 없음 - / 표시");
+                sb.append("/");
+            }
+            sb.append("</td>");
+            return sb.toString();
+        }
 
         boolean isSignedByThisPerson = false;
         String rawSignatureDate = null;

@@ -423,6 +423,8 @@
         public LeaveApplication submitLeaveApplication(
                 Long id,
                 Long approvalLineId,
+                LeaveApplicationUpdateFormRequestDto.UserInfo substituteInfo,  // ✅ 올바른 타입
+                LeaveApplicationUpdateFormRequestDto.UserInfo departmentHeadInfo,  // ✅ 올바른 타입
                 String userId
         ) {
             LeaveApplication application = leaveApplicationRepository.findById(id)
@@ -556,18 +558,17 @@
             ApprovalLine selectedLine = approvalLineRepository.findByIdWithSteps(approvalLineId)
                     .orElseThrow(() -> new EntityNotFoundException("선택된 결재라인을 찾을 수 없습니다."));
 
-            // 10-1. 결재 단계 복사 및 SUBSTITUTE 단계에 대직자 ID 주입
             List<ApprovalStep> finalSteps = selectedLine.getSteps().stream()
                     .map(step -> {
                         ApprovalStep processedStep = step.copy();
 
+                        // ✅ SUBSTITUTE 처리 부분 확인
                         if (processedStep.getApproverType() == ApproverType.SUBSTITUTE) {
-                            if (formDataDto.getSubstituteInfo() == null
-                                    || formDataDto.getSubstituteInfo().getUserId() == null) {
+                            if (substituteInfo == null || substituteInfo.getUserId() == null) {
                                 throw new IllegalArgumentException("대직자를 선택해주세요.");
                             }
 
-                            String substituteId = formDataDto.getSubstituteInfo().getUserId();
+                            String substituteId = substituteInfo.getUserId();
 
                             UserEntity substitute = userRepository.findByUserId(substituteId)
                                     .orElseThrow(() -> new EntityNotFoundException(
@@ -581,7 +582,51 @@
                                 );
                             }
 
-                            processedStep.setApproverId(substituteId);
+                            processedStep.setApproverId(substituteId);  // ✅ 이 부분이 실행되는지 확인
+
+                            // ✅ 추가: LeaveApplication에도 대직자 정보 설정
+                            application.setSubstituteId(substituteId);
+                        }
+
+                        // ✅ DEPARTMENT_HEAD 처리
+                        if (processedStep.getApproverType() == ApproverType.DEPARTMENT_HEAD) {
+                            if (departmentHeadInfo == null || departmentHeadInfo.getUserId() == null) {
+                                throw new IllegalArgumentException("부서장을 선택해주세요.");
+                            }
+
+                            String deptHeadId = departmentHeadInfo.getUserId();
+
+                            UserEntity deptHead = userRepository.findByUserId(deptHeadId)
+                                    .orElseThrow(() -> new EntityNotFoundException(
+                                            "부서장을 찾을 수 없습니다: " + deptHeadId
+                                    ));
+
+                            if (!"1".equals(deptHead.getUseFlag())) {
+                                throw new IllegalStateException(
+                                        String.format("부서장 '%s'는 비활성 상태입니다.",
+                                                deptHead.getUserName())
+                                );
+                            }
+
+                            processedStep.setApproverId(deptHeadId);
+                        }
+
+                        // ✅ SPECIFIC_USER 검증 (활성 여부만)
+                        if (processedStep.getApproverType() == ApproverType.SPECIFIC_USER) {
+                            String approverId = processedStep.getApproverId();
+                            if (approverId != null && !approverId.isEmpty()) {
+                                UserEntity approver = userRepository.findByUserId(approverId)
+                                        .orElseThrow(() -> new EntityNotFoundException(
+                                                "승인자를 찾을 수 없습니다: " + approverId
+                                        ));
+
+                                if (!"1".equals(approver.getUseFlag())) {
+                                    throw new IllegalStateException(
+                                            String.format("승인자 '%s'는 비활성 상태입니다.",
+                                                    approver.getUserName())
+                                    );
+                                }
+                            }
                         }
 
                         return processedStep;
@@ -611,6 +656,14 @@
 
             // 11. 저장
             try {
+                // ✅ substituteInfo와 departmentHeadInfo를 formDataDto에 설정
+                if (substituteInfo != null && substituteInfo.getUserId() != null) {
+                    formDataDto.setSubstituteInfo(substituteInfo);
+                }
+                if (departmentHeadInfo != null && departmentHeadInfo.getUserId() != null) {
+                    formDataDto.setDepartmentHeadInfo(departmentHeadInfo);
+                }
+
                 String mergedJson = objectMapper.writeValueAsString(formDataDto);
                 application.setFormDataJson(mergedJson);
             } catch (JsonProcessingException e) {
@@ -664,39 +717,6 @@
             application.setCurrentApprovalStep(null);
             application.setCurrentApproverId(null);
             application.setPrintable(true);
-
-            switch (currentStep) {
-                case "DEPARTMENT_HEAD_APPROVAL":
-                    application.setIsDeptHeadApproved(true);
-                    application.setIsHrStaffApproved(true);
-                    application.setIsCenterDirectorApproved(true);
-                    application.setIsAdminDirectorApproved(true);
-                    application.setIsCeoDirectorApproved(true);
-                    break;
-                case "HR_STAFF_APPROVAL":
-                    application.setIsHrStaffApproved(true);
-                    application.setIsCenterDirectorApproved(true);
-                    application.setIsAdminDirectorApproved(true);
-                    application.setIsCeoDirectorApproved(true);
-                    break;
-                case "CENTER_DIRECTOR_APPROVAL":
-                    application.setIsCenterDirectorApproved(true);
-                    application.setIsAdminDirectorApproved(true);
-                    application.setIsCeoDirectorApproved(true);
-                    break;
-                case "HR_FINAL_APPROVAL":
-                    application.setIsHrFinalApproved(true);
-                    application.setIsAdminDirectorApproved(true);
-                    application.setIsCeoDirectorApproved(true);
-                    break;
-                case "ADMIN_DIRECTOR_APPROVAL":
-                    application.setIsAdminDirectorApproved(true);
-                    application.setIsCeoDirectorApproved(true);
-                    break;
-                case "CEO_DIRECTOR_APPROVAL":
-                    application.setIsCeoDirectorApproved(true);
-                    break;
-            }
 
             // formDataJson 업데이트: 기존 로직 유지 + signatureNode 키도 함께 업데이트
             try {
@@ -1468,10 +1488,9 @@
             }
 
             // 4. 현재 승인자
-            if (application.isUsingApprovalLine()) {
-                if (viewer.getUserId().equals(application.getCurrentApproverId())) {
-                    return true;
-                }
+            if (viewer.getUserId().equals(application.getCurrentApproverId())) {
+                log.info("현재 승인자로 조회 허용: userId={}", viewer.getUserId());
+                return true;
             }
 
             // 5. 시스템 관리자
@@ -1583,7 +1602,6 @@
                     isFinalApproval
             );
 
-            // 전결 처리 로직
             if (isFinalApproval) {
                 application.setIsFinalApproved(true);
                 application.setFinalApprovalStep(currentStepBeforeApproval);

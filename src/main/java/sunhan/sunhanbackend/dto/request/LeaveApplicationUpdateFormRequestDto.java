@@ -1,5 +1,6 @@
 package sunhan.sunhanbackend.dto.request;
 
+import com.nimbusds.openid.connect.sdk.claims.UserInfo;
 import lombok.Data;
 
 import java.time.LocalDate;
@@ -11,7 +12,7 @@ public class LeaveApplicationUpdateFormRequestDto {
     // ✅ 1. 선택된 결재라인 ID 필드 추가 (필수)
     private Long approvalLineId;
     private ApplicantInfo applicantInfo;
-    private SubstituteInfo substituteInfo;
+    private UserInfo substituteInfo;
     private List<String> leaveTypes;
     private Map<String, String> leaveContent;
     private List<Map<String, String>> flexiblePeriods;
@@ -19,6 +20,7 @@ public class LeaveApplicationUpdateFormRequestDto {
     private Double totalDays;
     private LocalDate applicationDate;
     private Map<String, List<Map<String, Object>>> signatures;
+    private UserInfo departmentHeadInfo;
 
     // 내부 클래스들
     @Data
@@ -36,5 +38,15 @@ public class LeaveApplicationUpdateFormRequestDto {
         private String userId;
         private String name;
         private String position;
+    }
+
+    @Data
+    public static class UserInfo {
+        private String userId;
+        private String department;
+        private String name;
+        private String position;
+        private String contact;
+        private String phone;
     }
 }

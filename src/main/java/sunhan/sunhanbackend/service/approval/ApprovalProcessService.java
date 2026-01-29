@@ -87,8 +87,15 @@ public class ApprovalProcessService {
         DocumentApprovalProcess process = processRepository.findById(processId)
                 .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
 
-        ApprovalStep currentStep = getCurrentStep(process);
-        validateApproverPermission(currentStep, approverId);
+        // ✅ History에서 현재 단계 조회
+        ApprovalStepHistory currentHistory = getCurrentStepHistory(process);
+        validateApproverPermission(currentHistory, approverId);
+
+        // ✅ ApprovalLine에서 step 정보 가져오기 (ApproverType 확인용)
+        ApprovalStep currentStep = process.getApprovalLine().getSteps().stream()
+                .filter(step -> step.getStepOrder().equals(process.getCurrentStepOrder()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("현재 단계 정보를 찾을 수 없습니다."));
 
         // ✅ 현재 단계의 서명 업데이트 (전결 여부와 무관하게 실행)
         updateLeaveApplicationSignature(process, currentStep, approverId, signatureImageUrl);
@@ -136,6 +143,9 @@ public class ApprovalProcessService {
     /**
      * ✅ 새 메서드: 휴가원 서명 데이터 업데이트
      */
+    /**
+     * ✅ 검토 단계는 서명 저장하지 않음
+     */
     private void updateLeaveApplicationSignature(
             DocumentApprovalProcess process,
             ApprovalStep step,
@@ -143,6 +153,12 @@ public class ApprovalProcessService {
             String signatureImageUrl
     ) {
         if (process.getDocumentType() != DocumentType.LEAVE_APPLICATION) return;
+
+        // ✅ 검토 단계는 서명 저장 제외
+        if (Boolean.TRUE.equals(step.getIsOptional())) {
+            log.info("검토 단계(isOptional=true)는 서명을 저장하지 않습니다: stepOrder={}", step.getStepOrder());
+            return;
+        }
 
         LeaveApplication application = leaveApplicationRepository.findById(process.getDocumentId())
                 .orElseThrow(() -> new EntityNotFoundException("휴가원을 찾을 수 없습니다."));
@@ -158,10 +174,12 @@ public class ApprovalProcessService {
             Map<String, List<Map<String, Object>>> signatures =
                     (Map<String, List<Map<String, Object>>>) formData.getOrDefault("signatures", new HashMap<>());
 
-            String signatureType = getSignatureTypeFromApproverType(step.getApproverType());
+            String signatureType = getSignatureType(process, step.getApproverType(), step.getStepOrder());
+
+            log.info("서명 타입 결정: stepOrder={}, approverType={}, signatureType={}",
+                    step.getStepOrder(), step.getApproverType(), signatureType);
 
             if (signatureType != null) {
-                // ✅ 기존 서명 확인 (이미 승인된 경우 보존)
                 List<Map<String, Object>> existingSignatures = signatures.get(signatureType);
                 boolean alreadySigned = existingSignatures != null &&
                         !existingSignatures.isEmpty() &&
@@ -169,24 +187,22 @@ public class ApprovalProcessService {
 
                 if (alreadySigned) {
                     String existingSignerId = (String) existingSignatures.get(0).get("signerId");
-
-                    // ✅ 같은 사람이 다시 서명하는 경우에만 업데이트
                     if (approverId.equals(existingSignerId)) {
                         log.info("승인자 {}가 {}단계에서 재서명합니다.", approverId, signatureType);
                     } else {
                         log.info("{}단계는 이미 {}가 서명했으므로 {}의 서명을 건너뜁니다.",
                                 signatureType, existingSignerId, approverId);
-                        return; // 다른 사람이 이미 서명한 경우 건너뛰기
+                        return;
                     }
                 }
 
-                // ✅ 새 서명 생성
                 Map<String, Object> signature = new HashMap<>();
                 signature.put("text", "승인");
                 signature.put("imageUrl", signatureImageUrl);
-                signature.put("isSigned", true);
+                signature.put("isSkipped", false);
                 signature.put("signatureDate", LocalDateTime.now().toString());
                 signature.put("signerId", approverId);
+                signature.put("isSigned", true);
 
                 UserEntity approver = userRepository.findByUserId(approverId).orElse(null);
                 if (approver != null) {
@@ -197,6 +213,12 @@ public class ApprovalProcessService {
                 formData.put("signatures", signatures);
                 application.setFormDataJson(objectMapper.writeValueAsString(formData));
                 leaveApplicationRepository.save(application);
+
+                log.info("서명 저장 완료: signatureType={}, approverId={}, stepOrder={}",
+                        signatureType, approverId, step.getStepOrder());
+            } else {
+                log.warn("서명 타입을 결정할 수 없습니다: stepOrder={}, approverType={}",
+                        step.getStepOrder(), step.getApproverType());
             }
         } catch (Exception e) {
             log.error("서명 데이터 업데이트 실패", e);
@@ -204,20 +226,76 @@ public class ApprovalProcessService {
     }
 
     /**
-     * 새 메서드: ApproverType을 서명 타입으로 변환
+     * ✅ 검토 단계를 제외한 실제 서명 순서로 매핑
      */
-    private String getSignatureTypeFromApproverType(ApproverType approverType) {
-        return switch (approverType) {
-            case SUBSTITUTE -> "substitute";
-            case DEPARTMENT_HEAD -> "departmentHead";
-            case HR_STAFF -> "hrStaff";
-            case CENTER_DIRECTOR -> "centerDirector";
-            case ADMIN_DIRECTOR -> "adminDirector";
-            case CEO_DIRECTOR -> "ceoDirector";
+    private String getSignatureTypeFromStepOrder(DocumentApprovalProcess process, Integer stepOrder) {
+        if (stepOrder == null || stepOrder <= 0) return null;
+
+        List<ApprovalStep> allSteps = process.getApprovalLine().getSteps();
+
+        // ✅ SUBSTITUTE와 DEPARTMENT_HEAD는 별도 처리
+        for (ApprovalStep step : allSteps) {
+            if (step.getStepOrder().equals(stepOrder)) {
+                if (step.getApproverType() == ApproverType.SUBSTITUTE) {
+                    return "substitute";
+                }
+                if (step.getApproverType() == ApproverType.DEPARTMENT_HEAD) {
+                    return "departmentHead";
+                }
+                break;
+            }
+        }
+
+        // ✅ SPECIFIC_USER 중에서 isOptional=false만 필터링 (검토 단계 제외)
+        List<ApprovalStep> specificUserSteps = allSteps.stream()
+                .filter(step -> step.getApproverType() == ApproverType.SPECIFIC_USER
+                        && !Boolean.TRUE.equals(step.getIsOptional())) // ✅ 검토 단계 제외
+                .sorted(Comparator.comparing(ApprovalStep::getStepOrder))
+                .collect(Collectors.toList());
+
+        // 현재 stepOrder가 SPECIFIC_USER 중 몇 번째인지 찾기
+        int specificUserIndex = -1;
+        for (int i = 0; i < specificUserSteps.size(); i++) {
+            if (specificUserSteps.get(i).getStepOrder().equals(stepOrder)) {
+                specificUserIndex = i;
+                break;
+            }
+        }
+
+        if (specificUserIndex == -1) {
+            return null;
+        }
+
+        // ✅ 검토 단계 제외한 순서로 매핑
+        return switch (specificUserIndex) {
+            case 0 -> "hrStaff";
+            case 1 -> "centerDirector";
+            case 2 -> "adminDirector";
+            case 3 -> "ceoDirector";
             default -> null;
         };
     }
 
+    /**
+     * ✅ ApproverType과 stepOrder로 서명 타입 결정
+     */
+    private String getSignatureType(DocumentApprovalProcess process, ApproverType approverType, Integer stepOrder) {
+        // 1. ApproverType으로 먼저 판단 (우선순위)
+        if (approverType == ApproverType.SUBSTITUTE) {
+            return "substitute";
+        }
+
+        if (approverType == ApproverType.DEPARTMENT_HEAD) {
+            return "departmentHead";
+        }
+
+        // 2. SPECIFIC_USER인 경우 stepOrder로 판단
+        if (approverType == ApproverType.SPECIFIC_USER) {
+            return getSignatureTypeFromStepOrder(process, stepOrder);
+        }
+
+        return null;
+    }
     /**
      * 반려 처리
      */
@@ -226,8 +304,13 @@ public class ApprovalProcessService {
         DocumentApprovalProcess process = processRepository.findById(processId)
                 .orElseThrow(() -> new EntityNotFoundException("결재 프로세스를 찾을 수 없습니다."));
 
-        ApprovalStep currentStep = getCurrentStep(process);
-        validateApproverPermission(currentStep, approverId);
+        ApprovalStepHistory currentHistory = getCurrentStepHistory(process);
+        validateApproverPermission(currentHistory, approverId);
+
+        ApprovalStep currentStep = process.getApprovalLine().getSteps().stream()
+                .filter(step -> step.getStepOrder().equals(process.getCurrentStepOrder()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("현재 단계 정보를 찾을 수 없습니다."));
 
         // 이력 저장
         ApprovalStepHistory history = new ApprovalStepHistory();
@@ -253,37 +336,28 @@ public class ApprovalProcessService {
     /**
      * 현재 단계의 승인자 확인
      */
-    private ApprovalStep getCurrentStep(DocumentApprovalProcess process) {
-        return process.getApprovalLine().getSteps().stream()
-                .filter(step -> step.getStepOrder().equals(process.getCurrentStepOrder()))
-                .findFirst()
+    private ApprovalStepHistory getCurrentStepHistory(DocumentApprovalProcess process) {
+        return historyRepository
+                .findByApprovalProcessIdAndStepOrderAndAction(
+                        process.getId(),
+                        process.getCurrentStepOrder(),
+                        ApprovalAction.PENDING
+                )
                 .orElseThrow(() -> new IllegalStateException("현재 단계를 찾을 수 없습니다."));
     }
 
     /**
      * 승인자 권한 검증
      */
-    private void validateApproverPermission(ApprovalStep step, String approverId) {
-        switch (step.getApproverType()) {
-            case SPECIFIC_USER:
-                if (!step.getApproverId().equals(approverId)) {
-                    throw new AccessDeniedException("해당 단계의 승인 권한이 없습니다.");
-                }
-                break;
-            case JOB_LEVEL:
-                UserEntity approver = userRepository.findByUserId(approverId)
-                        .orElseThrow(() -> new EntityNotFoundException("사용자를 찾을 수 없습니다."));
-                if (!step.getJobLevel().equals(approver.getJobLevel())) {
-                    throw new AccessDeniedException("해당 직급의 승인 권한이 없습니다.");
-                }
-                break;
-            case DEPARTMENT_HEAD:
-                // 부서장 권한 확인 로직
-                break;
-            case HR_STAFF:
-                // 인사팀 권한 확인 로직
-                break;
-            // ... 다른 타입들 처리
+    private void validateApproverPermission(ApprovalStepHistory history, String approverId) {
+        if (history.getApproverId() == null || history.getApproverId().isEmpty()) {
+            throw new IllegalStateException(
+                    String.format("단계 '%s'에 승인자가 지정되지 않았습니다.", history.getStepName())
+            );
+        }
+
+        if (!history.getApproverId().equals(approverId)) {
+            throw new AccessDeniedException("해당 단계의 승인 권한이 없습니다.");
         }
     }
 
@@ -402,7 +476,7 @@ public class ApprovalProcessService {
     }
 
     /**
-     * 전결 승인 처리
+     * ✅ 전결 처리 - 검토 단계는 제외
      */
     private void handleFinalApproval(
             DocumentApprovalProcess process,
@@ -410,34 +484,21 @@ public class ApprovalProcessService {
             String finalApproverId,
             String finalApproverSignatureUrl
     ) {
-        // ✅ 현재 단계보다 높은 단계만 자동 처리 (현재 단계는 이미 approveStep에서 처리됨)
+        // ✅ 검토 단계를 제외한 남은 단계만 처리
         List<ApprovalStep> remainingSteps = process.getApprovalLine().getSteps().stream()
-                .filter(step -> step.getStepOrder() > process.getCurrentStepOrder()) // 현재 제외
+                .filter(step -> step.getStepOrder() > process.getCurrentStepOrder())
+                .filter(step -> step.getApproverType() == ApproverType.SPECIFIC_USER
+                        && !Boolean.TRUE.equals(step.getIsOptional())) // ✅ 검토 단계 제외
                 .collect(Collectors.toList());
 
-        log.info("전결 처리 시작: currentStepOrder={}, remainingSteps={}",
-                process.getCurrentStepOrder(),
-                remainingSteps.stream().map(ApprovalStep::getStepOrder).collect(Collectors.toList()));
+        // ✅ 휴가원 4개 제한 체크
+        if (process.getDocumentType() == DocumentType.LEAVE_APPLICATION
+                && remainingSteps.size() > 4) {
+            throw new IllegalStateException("휴가원의 전결 처리 가능한 단계가 4개를 초과합니다.");
+        }
 
-        // 남은 단계들만 SKIPPED로 처리
         for (ApprovalStep step : remainingSteps) {
-            // ✅ 이미 승인된 단계는 건너뛰기 (기존 서명 보존)
-            ApprovalStepHistory existingHistory = historyRepository
-                    .findByApprovalProcessIdAndStepOrderAndAction(
-                            process.getId(),
-                            step.getStepOrder(),
-                            ApprovalAction.APPROVED  // ✅ APPROVED 상태 확인
-                    )
-                    .orElse(null);
-
-            if (existingHistory != null) {
-                log.info("단계 {}는 이미 승인 완료되었으므로 건너뜁니다. (approverId: {})",
-                        step.getStepOrder(), existingHistory.getApproverId());
-                continue; // ✅ 이미 승인된 단계는 서명 데이터를 그대로 보존
-            }
-
-            // ✅ PENDING 상태의 History 찾기
-            ApprovalStepHistory pendingHistory = historyRepository
+            ApprovalStepHistory history = historyRepository
                     .findByApprovalProcessIdAndStepOrderAndAction(
                             process.getId(),
                             step.getStepOrder(),
@@ -445,24 +506,20 @@ public class ApprovalProcessService {
                     )
                     .orElse(null);
 
-            if (pendingHistory != null) {
-                pendingHistory.setAction(ApprovalAction.SKIPPED);
-                pendingHistory.setComment("전결 승인으로 자동 처리됨");
-                pendingHistory.setActionDate(LocalDateTime.now());
-                historyRepository.save(pendingHistory);
+            if (history != null) {
+                history.setAction(ApprovalAction.APPROVED);
+                history.setComment("전결 승인으로 자동 처리됨");
+                history.setIsSigned(false); // ✅ 명시적으로 false
+                history.setActionDate(LocalDateTime.now());
+                historyRepository.save(history);
             }
 
-            // ✅ 전결 처리된 단계의 서명에만 "전결처리!" 표시
-            updateLeaveApplicationFinalApprovalSignature(
-                    process,
-                    step,
-                    finalApproverId
-            );
+            // ✅ "전결처리!" 표시
+            updateLeaveApplicationFinalApprovalSignature(process, step, finalApproverId);
         }
 
         process.setStatus(ApprovalProcessStatus.APPROVED);
         processRepository.save(process);
-
         notifyCompletion(process);
     }
 
@@ -488,35 +545,34 @@ public class ApprovalProcessService {
             Map<String, List<Map<String, Object>>> signatures =
                     (Map<String, List<Map<String, Object>>>) formData.getOrDefault("signatures", new HashMap<>());
 
-            String signatureType = getSignatureTypeFromApproverType(step.getApproverType());
+            String signatureType = getSignatureType(process, step.getApproverType(), step.getStepOrder());
 
             if (signatureType != null) {
-                // ✅ 기존 서명이 있는지 확인
+                // ✅ 이미 실제 서명이 있으면 덮어쓰지 않음
                 List<Map<String, Object>> existingSignatures = signatures.get(signatureType);
                 boolean alreadySigned = existingSignatures != null &&
                         !existingSignatures.isEmpty() &&
                         Boolean.TRUE.equals(existingSignatures.get(0).get("isSigned"));
 
-                // ✅ 이미 실제 서명이 있으면 덮어쓰지 않음
                 if (alreadySigned) {
                     Object existingImageUrl = existingSignatures.get(0).get("imageUrl");
-
-                    // 실제 이미지가 있으면 보존
                     if (existingImageUrl != null && !existingImageUrl.toString().isEmpty()) {
-                        log.info("{}단계는 이미 실제 서명이 있으므로 전결 표시를 하지 않습니다. (imageUrl: {})",
-                                signatureType, existingImageUrl);
-                        return; // ✅ 기존 서명 보존하고 종료
+                        log.info("{}단계는 이미 실제 서명이 있으므로 전결 표시를 하지 않습니다.", signatureType);
+                        return;
                     }
                 }
+                String finalApprovalDateStr = application.getFinalApprovalDate() != null
+                        ? application.getFinalApprovalDate().toString()
+                        : LocalDateTime.now().toString();
 
-                // ✅ 실제 서명이 없는 경우에만 "전결처리!" 표시
+                // ✅ "전결처리!" 표시
                 Map<String, Object> signature = new HashMap<>();
                 signature.put("text", "전결처리!");
                 signature.put("imageUrl", null);
-                signature.put("isSigned", true);
-                signature.put("isSkipped", true);
+                signature.put("isSigned", false); // ✅ false로 명시
+                signature.put("isSkipped", false);
                 signature.put("isFinalApproval", true);
-                signature.put("signatureDate", LocalDateTime.now().toString());
+                signature.put("signatureDate", finalApprovalDateStr);
                 signature.put("skippedBy", finalApproverId);
                 signature.put("skippedReason", "전결 승인으로 생략됨");
 
@@ -536,7 +592,8 @@ public class ApprovalProcessService {
                 application.setFormDataJson(objectMapper.writeValueAsString(formData));
                 leaveApplicationRepository.save(application);
 
-                log.info("전결 표시 업데이트 완료: signatureType={}, text={}", signatureType, signature.get("text"));
+                log.info("전결 표시 업데이트 완료: signatureType={}, text={}, stepOrder={}",
+                        signatureType, signature.get("text"), step.getStepOrder());
             }
         } catch (Exception e) {
             log.error("전결 서명 데이터 업데이트 실패", e);
@@ -567,7 +624,7 @@ public class ApprovalProcessService {
             Long documentId,
             DocumentType documentType,
             ApprovalLine templateLine,
-            List<ApprovalStep> steps,
+            List<ApprovalStep> steps,  // ✅ 이미 처리된 steps를 받음
             String applicantId
     ) {
         // 1. ✅ 모든 승인자의 활성 여부 검증
@@ -590,8 +647,7 @@ public class ApprovalProcessService {
         process.setCurrentStepOrder(firstStep.getStepOrder());
         DocumentApprovalProcess savedProcess = processRepository.save(process);
 
-        // 4. ✅ 모든 단계를 History에 스냅샷으로 저장
-        // ✅ 중요: 같은 승인자가 여러 단계에 있어도 각 단계별로 History를 생성해야 함
+        // 4. ✅ 전달받은 steps를 그대로 사용 (DB 재조회 X)
         for (ApprovalStep step : steps) {
             ApprovalStepHistory history = new ApprovalStepHistory();
             history.setApprovalProcess(savedProcess);
@@ -599,6 +655,20 @@ public class ApprovalProcessService {
             history.setStepName(step.getStepName());
 
             String approverId = step.getApproverId();
+
+            // ✅ 로그 추가
+            log.info("History 생성: stepOrder={}, approverType={}, approverId={}, stepName={}",
+                    step.getStepOrder(), step.getApproverType(), approverId, step.getStepName());
+
+            if (approverId == null || approverId.isEmpty()) {
+                log.error("approverId가 null입니다! step={}, approverType={}",
+                        step.getStepName(), step.getApproverType());
+                throw new IllegalStateException(
+                        String.format("단계 %d(%s)에 승인자가 지정되지 않았습니다.",
+                                step.getStepOrder(), step.getStepName())
+                );
+            }
+
             history.setApproverId(approverId);
 
             UserEntity approver = userRepository.findByUserId(approverId)
@@ -613,7 +683,7 @@ public class ApprovalProcessService {
 
             historyRepository.save(history);
 
-            log.info("결재 History 생성: processId={}, stepOrder={}, approverId={}, stepName={}",
+            log.info("결재 History 생성 완료: processId={}, stepOrder={}, approverId={}, stepName={}",
                     savedProcess.getId(), step.getStepOrder(), approverId, step.getStepName());
         }
 
